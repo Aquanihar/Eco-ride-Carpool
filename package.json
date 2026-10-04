@@ -1,0 +1,24 @@
+{
+  "name": "carpool-app",
+  "version": "1.0.0",
+  "description": "EcoRide - Smart Route-Based Carpooling Platform",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.117.2",
+    "jsonwebtoken": "^9.0.3",
+    "leaflet": "^1.9.4",
+    "lucide-react": "^0.511.0",
+    "next": "^15.3.4",
+    "nodemailer": "^10.0.13",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-leaflet": "^5.0.0",
+    "resend": "^6.32.0"
+  }
+}

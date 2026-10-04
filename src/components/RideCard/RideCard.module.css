@@ -1,0 +1,266 @@
+.rideCard {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Top row */
+.topRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.driverInfo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.avatar {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--gradient-primary);
+  border-radius: var(--radius-full);
+  font-weight: 700;
+  font-size: 1rem;
+  color: white;
+}
+
+.driverName {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 0.9375rem;
+}
+
+.verifiedIcon {
+  color: var(--primary-400);
+}
+
+.driverMeta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8125rem;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+
+.starIcon {
+  color: var(--warm-400);
+}
+
+.dot {
+  margin: 0 2px;
+}
+
+.priceBlock {
+  text-align: right;
+}
+
+.price {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 1.375rem;
+  font-weight: 700;
+  color: var(--primary-400);
+}
+
+.priceLabel {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+}
+
+/* Route Timeline */
+.route {
+  display: flex;
+  gap: 14px;
+  padding: 16px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-subtle);
+}
+
+.routeTimeline {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 4px 0;
+  flex-shrink: 0;
+}
+
+.routeDot {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
+
+.routeLine {
+  width: 2px;
+  flex: 1;
+  min-height: 20px;
+  background: var(--border-default);
+}
+
+.routeWaypoint {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--gray-500);
+  border: 2px solid var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.routeDetails {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  flex: 1;
+  gap: 4px;
+}
+
+.routePoint {
+  display: flex;
+  align-items: center;
+}
+
+.routeName {
+  font-weight: 600;
+  font-size: 0.9375rem;
+  color: var(--text-primary);
+}
+
+.routeWaypointLabel {
+  padding-left: 44px;
+  font-size: 0.8125rem;
+  color: var(--text-tertiary);
+}
+
+.mapSection {
+  width: 100%;
+  margin-top: 4px;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+/* Bottom row */
+.bottomRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.metaTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.metaTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-full);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Preferences */
+.prefs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.prefTag {
+  padding: 3px 10px;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  letter-spacing: 0.02em;
+}
+
+@media (max-width: 768px) {
+  .topRow {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  .driverInfo {
+    gap: 10px;
+  }
+
+  .avatar {
+    width: 38px;
+    height: 38px;
+    font-size: 0.875rem;
+  }
+
+  .driverName {
+    font-size: 0.875rem;
+  }
+
+  .priceBlock {
+    text-align: right;
+  }
+
+  .price {
+    font-size: 1.25rem;
+  }
+
+  .route {
+    padding: 12px;
+    gap: 10px;
+  }
+
+  .bottomRow {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .metaTags {
+    justify-content: flex-start;
+    gap: 6px;
+  }
+
+  .metaTag {
+    font-size: 0.7188rem;
+    padding: 4px 10px;
+  }
+
+  .actions {
+    width: 100%;
+    display: flex;
+    gap: 8px;
+  }
+
+  .actions button {
+    flex: 1;
+    min-height: 44px;
+    justify-content: center;
+  }
+}

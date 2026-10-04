@@ -1,0 +1,68 @@
+.mapWrapper {
+  position: relative;
+  width: 100%;
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-md);
+  background: var(--bg-tertiary);
+  margin-top: 16px;
+}
+
+.mapContainer {
+  width: 100%;
+  height: 100%;
+}
+
+.mapErrorFallback {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-tertiary);
+  border: 1px dashed var(--border-default);
+  border-radius: var(--radius-xl);
+  color: var(--text-tertiary);
+  font-size: 0.875rem;
+  padding: 20px;
+  text-align: center;
+  margin-top: 16px;
+}
+
+.routeOverlay {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.overlayTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: var(--radius-full);
+  color: white;
+  font-size: 0.8125rem;
+  box-shadow: var(--shadow-md);
+}
+
+@media (max-width: 768px) {
+  .routeOverlay {
+    top: 10px;
+    right: 10px;
+    gap: 6px;
+  }
+
+  .overlayTag {
+    font-size: 0.75rem;
+    padding: 4px 10px;
+  }
+}

@@ -1,0 +1,237 @@
+.navbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  padding: 16px 0;
+  transition: all var(--transition-base);
+}
+
+.scrolled {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 10px 0;
+}
+
+[data-theme="dark"] .scrolled {
+  background: rgba(3, 7, 18, 0.85);
+}
+
+.inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 32px;
+}
+
+/* Logo */
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+}
+
+.logoIcon {
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--gradient-primary);
+  border-radius: var(--radius-md);
+  color: white;
+}
+
+.logoText {
+  font-family: var(--font-display);
+  font-size: 1.375rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.logoAccent {
+  background: var(--gradient-primary);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Desktop links */
+.links {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  border-radius: var(--radius-md);
+  transition: all var(--transition-fast);
+}
+
+.link:hover {
+  color: var(--text-primary);
+  background: rgba(15, 23, 42, 0.05);
+}
+
+[data-theme="dark"] .link:hover {
+  background: rgba(148, 163, 184, 0.08);
+}
+
+/* Actions */
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.iconBtn {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  border-radius: var(--radius-md);
+  transition: all var(--transition-fast);
+}
+
+.iconBtn:hover {
+  color: var(--text-primary);
+  background: rgba(15, 23, 42, 0.05);
+}
+
+[data-theme="dark"] .iconBtn:hover {
+  background: rgba(148, 163, 184, 0.08);
+}
+
+/* Theme toggle */
+.themeToggle {
+  color: var(--text-secondary);
+}
+
+.themeToggle:hover {
+  color: var(--warm-400);
+}
+
+.badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--error);
+  color: white;
+  font-size: 0.625rem;
+  font-weight: 700;
+  border-radius: var(--radius-full);
+}
+
+.ctaBtn {
+  margin-left: 8px;
+}
+
+/* Mobile Bottom Tab Bar */
+.bottomTabBar {
+  display: none;
+}
+
+@keyframes pulseGlow {
+  0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+  70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+@media (max-width: 768px) {
+  .links {
+    display: none;
+  }
+
+  .ctaBtn {
+    display: none;
+  }
+
+  .desktopOnly {
+    display: none;
+  }
+
+  .bottomTabBar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    z-index: 1000;
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-top: 1px solid var(--border-subtle);
+    padding-bottom: env(safe-area-inset-bottom, 8px);
+    display: flex;
+    justify-content: space-evenly;
+    align-items: flex-end;
+    padding-top: 8px;
+  }
+  
+  [data-theme="dark"] .bottomTabBar {
+    background: rgba(3, 7, 18, 0.95);
+  }
+  
+  .tab {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    color: var(--text-tertiary);
+    text-decoration: none;
+    flex: 1;
+    padding-bottom: 4px;
+  }
+  
+  .activeTab {
+    color: var(--primary-400);
+  }
+  
+  .tabLabel {
+    font-size: 0.625rem;
+    font-weight: 500;
+  }
+
+  .fabWrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    flex: 1;
+    position: relative;
+    padding-bottom: 4px;
+  }
+  
+  .fabBtn {
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: var(--gradient-primary);
+    margin-top: -20px;
+    box-shadow: 0 4px 20px rgba(16, 185, 129, 0.3);
+    color: white;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    animation: pulseGlow 2s infinite;
+  }
+}
