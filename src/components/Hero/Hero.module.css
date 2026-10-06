@@ -268,12 +268,12 @@
 /* Hero visual */
 .heroVisual {
   width: 100%;
-  max-width: 800px;
+  max-width: 520px;
   margin-top: 48px;
   border-radius: var(--radius-xl);
   overflow: hidden;
   border: 1px solid var(--border-subtle);
-  box-shadow: var(--shadow-xl);
+  box-shadow: 0 20px 50px -10px rgba(30, 64, 175, 0.25), var(--shadow-xl);
   animation: fadeIn 1s ease-out 0.6s both;
 }
 

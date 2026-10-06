@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'ecoride-super-secret-jwt-key-2026';
+const JWT_SECRET = process.env.JWT_SECRET || 'raahi-super-secret-jwt-key-2026';
 
 export function signToken(payload) {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });

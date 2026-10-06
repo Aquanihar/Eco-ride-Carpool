@@ -30,13 +30,13 @@ export async function POST(req) {
 
       // Dispatch real email to recipientEmail address
       const info = await transporter.sendMail({
-        from: `"EcoRide Carpool" <${smtpUser}>`,
+        from: `"Raahi Carpool" <${smtpUser}>`,
         to: recipientEmail,
-        subject: 'Your EcoRide Email Verification OTP: ' + generatedOtp,
-        text: `Your EcoRide verification code is: ${generatedOtp}. Enter this code in your browser to verify your email.`,
+        subject: 'Your Raahi Email Verification OTP: ' + generatedOtp,
+        text: `Your Raahi verification code is: ${generatedOtp}. Enter this code in your browser to verify your email.`,
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px; background-color: #ffffff;">
-            <h2 style="color: #10b981; margin-top: 0;">EcoRide Account Verification</h2>
+            <h2 style="color: #10b981; margin-top: 0;">Raahi Account Verification</h2>
             <p style="color: #475569; font-size: 15px;">Your 6-digit OTP code to verify your email address is:</p>
             <div style="background: #ecfdf5; padding: 20px; border-radius: 12px; text-align: center; margin: 24px 0; border: 1px solid #a7f3d0;">
               <span style="font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #047857;">${generatedOtp}</span>
@@ -46,7 +46,7 @@ export async function POST(req) {
         `,
       });
 
-      console.log(`[EcoRide Security OTP] Dispatched code ${generatedOtp} to recipient ${recipientEmail}: ${info.response}`);
+      console.log(`[Raahi Security OTP] Dispatched code ${generatedOtp} to recipient ${recipientEmail}: ${info.response}`);
 
       return Response.json({
         success: true,

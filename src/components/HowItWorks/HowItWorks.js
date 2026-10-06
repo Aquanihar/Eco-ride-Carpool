@@ -39,7 +39,7 @@ const FEATURES = [
     icon: Route,
     title: 'Route-Based Matching',
     description:
-      "Unlike destination-only apps, EcoRide matches along the entire route. If someone's path overlaps with yours, you ride together.",
+      "Unlike destination-only apps, Raahi matches along the entire route. If someone's path overlaps with yours, you ride together.",
   },
   {
     icon: Shield,
@@ -104,7 +104,7 @@ export default function HowItWorks() {
       <section className={`section ${styles.featuresSection}`} id="features">
         <div className="container">
           <div className={styles.sectionHeader}>
-            <span className="badge badge-accent">Why EcoRide?</span>
+            <span className="badge badge-accent">Why Raahi?</span>
             <h2 className="heading-lg">
               Built for <span className="gradient-text">Smarter</span> Rides
             </h2>

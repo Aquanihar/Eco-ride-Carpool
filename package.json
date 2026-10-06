@@ -1,10 +1,10 @@
 {
   "name": "carpool-app",
   "version": "1.0.0",
-  "description": "EcoRide - Smart Route-Based Carpooling Platform",
+  "description": "Raahi - Smart Route-Based Carpooling Platform",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -H 0.0.0.0",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"

@@ -10,7 +10,7 @@ export function ThemeProvider({ children }) {
 
   // On mount, read saved preference or system preference
   useEffect(() => {
-    const saved = localStorage.getItem('ecoride-theme');
+    const saved = localStorage.getItem('raahi-theme') || localStorage.getItem('ecoride-theme');
     if (saved === 'dark' || saved === 'light') {
       setTheme(saved);
     } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
@@ -23,7 +23,7 @@ export function ThemeProvider({ children }) {
   useEffect(() => {
     if (mounted) {
       document.documentElement.setAttribute('data-theme', theme);
-      localStorage.setItem('ecoride-theme', theme);
+      localStorage.setItem('raahi-theme', theme);
     }
   }, [theme, mounted]);
 

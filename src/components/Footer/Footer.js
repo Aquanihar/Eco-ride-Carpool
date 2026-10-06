@@ -12,14 +12,11 @@ export default function Footer() {
           {/* Brand */}
           <div className={styles.brand}>
             <div className={styles.logo}>
-              <div className={styles.logoIcon}>
-                <Leaf size={18} />
-              </div>
-              <span className={styles.logoText}>EcoRide</span>
+              <img src="/images/raahi-logo.jpg" alt="Raahi Logo" className={styles.logoImg} />
+              <span className={styles.logoText}>Raahi</span>
             </div>
             <p className="text-sm">
-              Making commutes greener, one shared ride at a time. Join thousands
-              of eco-conscious riders building a sustainable future.
+              Share Rides. Build Connections. Making commutes greener, easier, and more affordable one shared ride at a time.
             </p>
           </div>
 
@@ -57,7 +54,7 @@ export default function Footer() {
 
         <div className={styles.bottom}>
           <p className={styles.copy}>
-            © 2026 EcoRide. Made with <Heart size={14} className={styles.heart} /> for the planet.
+            © 2026 Raahi. Made with <Heart size={14} className={styles.heart} /> for the planet.
           </p>
           <div className={styles.socials}>
             <a href="#" className={styles.socialIcon}><Globe size={18} /></a>

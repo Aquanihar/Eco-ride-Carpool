@@ -24,7 +24,7 @@ async function getRealCoordinates(locationQuery, fallbackLat, fallbackLng) {
 
     const res = await fetch(
       `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=1`,
-      { headers: { 'User-Agent': 'EcoRideCarpoolApp/1.0' } }
+      { headers: { 'User-Agent': 'RaahiCarpoolApp/1.0' } }
     );
     const data = await res.json();
     if (data && data.length > 0) {

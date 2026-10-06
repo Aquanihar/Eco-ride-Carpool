@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useCallback } from 'react';
+import CarpoolCarousel from '@/components/CarpoolCarousel/CarpoolCarousel';
 import styles from './LoginPage.module.css';
 
 export default function LoginPage({ onComplete }) {
@@ -384,23 +385,12 @@ export default function LoginPage({ onComplete }) {
         <div className={styles.brandPanel}>
           <div className={styles.brandContent}>
             <div className={styles.logoMark}>
-              <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-                <circle cx="24" cy="24" r="22" stroke="url(#logo-grad)" strokeWidth="2.5" />
-                <path d="M16 28C16 28 19 20 24 20C29 20 32 28 32 28" stroke="url(#logo-grad)" strokeWidth="2.5" strokeLinecap="round" />
-                <circle cx="24" cy="16" r="3" fill="url(#logo-grad)" />
-                <path d="M14 34L24 30L34 34" stroke="url(#logo-grad)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                <defs>
-                  <linearGradient id="logo-grad" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
-                    <stop stopColor="#10b981" />
-                    <stop offset="1" stopColor="#06b6d4" />
-                  </linearGradient>
-                </defs>
-              </svg>
+              <img src="/images/raahi-logo.jpg" alt="Raahi Logo" className={styles.logoMarkImg} />
             </div>
-            <h1 className={styles.brandName}>EcoRide</h1>
+            <h1 className={styles.brandName}>Raahi</h1>
             <p className={styles.brandTagline}>
-              Share rides. Save the planet.<br />
-              One journey at a time.
+              Share Rides. Build Connections.<br />
+              Smart route-matching for every journey.
             </p>
 
             <div className={styles.statsRow}>
@@ -437,7 +427,7 @@ export default function LoginPage({ onComplete }) {
             </div>
 
             <div className={styles.brandImage}>
-              <img src="/images/login-onboarding.jpg" alt="EcoRide onboarding" className={styles.brandImg} />
+              <img src="/images/raahi-hero.jpg" alt="Raahi - Share Rides. Build Connections." className={styles.brandImg} />
             </div>
           </div>
         </div>
@@ -445,6 +435,18 @@ export default function LoginPage({ onComplete }) {
         {/* Right Panel — Form */}
         <div className={styles.formPanel}>
           <div className={styles.formWrapper}>
+            {/* Mobile Brand Header */}
+            <div className={styles.mobileBrandHeader}>
+              <img src="/images/raahi-logo.jpg" alt="Raahi" className={styles.mobileBrandLogo} />
+              <div className={styles.mobileBrandMeta}>
+                <span className={styles.mobileBrandName}>Raahi</span>
+                <span className={styles.mobileBrandTag}>Share Rides • Build Connections</span>
+              </div>
+            </div>
+
+            {/* Carpool Highlights Carousel */}
+            <CarpoolCarousel />
+
             {/* Step Indicator */}
             <div className={styles.stepIndicator}>
               <div className={`${styles.stepDot} ${step >= 1 ? styles.stepActive : ''}`}>
@@ -467,7 +469,7 @@ export default function LoginPage({ onComplete }) {
                 {step === 3 && 'Email OTP Verification'}
               </h2>
               <p className={styles.formSubtitle}>
-                {step === 1 && 'Enter your details to join EcoRide'}
+                {step === 1 && 'Enter your details to join Raahi'}
                 {step === 2 && 'Upload valid ID proof and driving license'}
                 {step === 3 && `Enter 6-digit OTP code sent to ${formData.email}`}
               </p>

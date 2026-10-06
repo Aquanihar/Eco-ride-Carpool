@@ -51,12 +51,12 @@ export default function Hero() {
         {/* Heading */}
         <h1 className={`heading-xl ${styles.heading}`}>
           <span className={styles.singleLineHeading}>
-            Share Your Ride, <span className="gradient-text">Save the Planet</span>
+            Share Rides, <span className="gradient-text">Build Connections</span>
           </span>
         </h1>
 
         <p className={`text-lg ${styles.subtitle}`}>
-          Going somewhere? Someone else is too. EcoRide matches you with people
+          Going somewhere? Someone else is too. Raahi matches you with people
           heading the same way — split costs, cut emissions, and ride together.
         </p>
 
@@ -137,7 +137,7 @@ export default function Hero() {
 
         {/* Hero visual */}
         <div className={styles.heroVisual}>
-          <img src="/images/hero-carpool.jpg" alt="EcoRide carpooling" className={styles.heroImage} />
+          <img src="/images/raahi-hero.jpg" alt="Raahi - Share Rides. Build Connections." className={styles.heroImage} />
         </div>
       </div>
     </section>

@@ -36,11 +36,9 @@ export default function Navbar() {
         <div className={`container ${styles.inner}`}>
           {/* Logo */}
           <Link href="/" className={styles.logo}>
-            <div className={styles.logoIcon}>
-              <Leaf size={22} />
-            </div>
+            <img src="/images/raahi-logo.jpg" alt="Raahi Logo" className={styles.logoImg} />
             <span className={styles.logoText}>
-              Eco<span className={styles.logoAccent}>Ride</span>
+              Raa<span className={styles.logoAccent}>hi</span>
             </span>
           </Link>
 

@@ -34,6 +34,14 @@
   color: white;
 }
 
+.logoImg {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
 .logoText {
   font-family: var(--font-display);
   font-size: 1.25rem;
