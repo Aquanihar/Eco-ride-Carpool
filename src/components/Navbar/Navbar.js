@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useContext } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useApp } from '@/context/AppContext';
+import { AppContext, useApp } from '@/context/AppContext';
 import { useTheme } from '@/context/ThemeContext';
 import {
   Leaf,
@@ -15,12 +15,14 @@ import {
   Home,
   Sun,
   Moon,
+  Shield,
 } from 'lucide-react';
 import styles from './Navbar.module.css';
 
 export default function Navbar() {
   const pathname = usePathname();
-  const { unreadCount } = useApp();
+  const appContext = useContext(AppContext);
+  const unreadCount = appContext?.unreadCount || 0;
   const { isDark, toggleTheme } = useTheme();
   const [scrolled, setScrolled] = useState(false);
 
@@ -52,6 +54,9 @@ export default function Navbar() {
             </Link>
             <Link href="/my-rides" className={styles.link}>
               <Car size={16} /> My Rides
+            </Link>
+            <Link href="/admin/verifications" className={styles.link} title="Backend Document Verification Portal">
+              <Shield size={16} /> Admin Portal
             </Link>
           </div>
 

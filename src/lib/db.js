@@ -1,14 +1,19 @@
 import { supabase } from './supabase.js';
 
 // In-memory store for fallback mode when Supabase DB tables aren't migrated
-const memoryDB = {
+const globalStore = globalThis.__raahi_memory_db || {
   users: new Map(),
   vehicles: new Map(),
   rides: new Map(),
   rideRequests: new Map(),
   bookings: new Map(),
   notifications: new Map(),
+  verifications: new Map(),
 };
+if (process.env.NODE_ENV !== 'production') {
+  globalThis.__raahi_memory_db = globalStore;
+}
+const memoryDB = globalStore;
 
 // Seed sample rides in memory DB
 const sampleRides = [
@@ -671,5 +676,212 @@ export function resetMemoryDB() {
   memoryDB.rideRequests.clear();
   memoryDB.bookings.clear();
   memoryDB.notifications.clear();
+  memoryDB.verifications.clear();
   sampleRides.forEach((r) => memoryDB.rides.set(r.id, r));
 }
+
+/* =========================================================
+   Document Verification Operations (Aadhaar & Driving License)
+   ========================================================= */
+
+export async function dbCreateDocumentVerification(data) {
+  const normEmail = (data.email || '').trim().toLowerCase();
+  const timestamp = Date.now();
+  const id = `doc_${normEmail.replace(/[^a-z0-9]/g, '_')}_${timestamp}`;
+
+  const record = {
+    id,
+    email: normEmail,
+    fullName: data.fullName || '',
+    phone: data.phone || '',
+    idProofName: data.idProofName || 'aadhaar_card.pdf',
+    idProofBase64: data.idProofBase64 || null,
+    drivingLicenseName: data.drivingLicenseName || 'driving_license.pdf',
+    drivingLicenseBase64: data.drivingLicenseBase64 || null,
+    status: 'PENDING', // PENDING, APPROVED, REJECTED
+    adminNotes: '',
+    submittedAt: new Date().toISOString(),
+    reviewedAt: null,
+  };
+
+  // 1. Try storing in dedicated Supabase 'verifications' table if created
+  try {
+    const { data: inserted, error } = await supabase
+      .from('verifications')
+      .upsert([record], { onConflict: 'email' })
+      .select()
+      .single();
+    if (inserted && !error) {
+      memoryDB.verifications.set(normEmail, inserted);
+      return inserted;
+    }
+  } catch (err) {}
+
+  // 2. Persist directly in Supabase database ('rides' table storage)
+  try {
+    const payload = {
+      id: id,
+      driver: {
+        type: 'DOC_VERIFICATION',
+        ...record,
+      },
+      status: 'VERIFICATION_PENDING',
+    };
+    const { error: rideErr } = await supabase.from('rides').insert([payload]);
+    if (!rideErr) {
+      memoryDB.verifications.set(normEmail, record);
+      return record;
+    }
+  } catch (err) {}
+
+  memoryDB.verifications.set(normEmail, record);
+  return record;
+}
+
+export async function dbGetVerificationByEmail(email) {
+  const normEmail = (email || '').trim().toLowerCase();
+
+  // 1. Check dedicated verifications table
+  try {
+    const { data } = await supabase
+      .from('verifications')
+      .select('*')
+      .eq('email', normEmail)
+      .order('submittedAt', { ascending: false })
+      .limit(1)
+      .single();
+    if (data) return data;
+  } catch (err) {}
+
+  // 2. Check Supabase rides storage (fetches latest record for this user)
+  try {
+    const { data: rows } = await supabase
+      .from('rides')
+      .select('*')
+      .ilike('status', 'VERIFICATION_%')
+      .filter('driver->>email', 'eq', normEmail)
+      .order('id', { ascending: false })
+      .limit(1);
+
+    if (rows && rows.length > 0 && rows[0].driver && rows[0].driver.type === 'DOC_VERIFICATION') {
+      const rec = rows[0].driver;
+      memoryDB.verifications.set(normEmail, rec);
+      return rec;
+    }
+  } catch (err) {}
+
+  if (memoryDB.verifications.has(normEmail)) {
+    return memoryDB.verifications.get(normEmail);
+  }
+
+  return null;
+}
+
+export async function dbGetAllVerifications() {
+  const emailMap = new Map();
+
+  // 1. Check dedicated verifications table
+  try {
+    const { data } = await supabase
+      .from('verifications')
+      .select('*')
+      .order('submittedAt', { ascending: false });
+    if (data && data.length > 0) return data;
+  } catch (err) {}
+
+  // 2. Check Supabase rides database (aggregates latest per user)
+  try {
+    const { data: rideRows } = await supabase
+      .from('rides')
+      .select('*')
+      .ilike('status', 'VERIFICATION_%')
+      .order('id', { ascending: false });
+
+    if (rideRows && rideRows.length > 0) {
+      rideRows.forEach((r) => {
+        if (r.driver && r.driver.type === 'DOC_VERIFICATION' && r.driver.email) {
+          const userEmail = r.driver.email.toLowerCase();
+          if (!emailMap.has(userEmail)) {
+            emailMap.set(userEmail, r.driver);
+          }
+        }
+      });
+
+      if (emailMap.size > 0) {
+        const records = Array.from(emailMap.values());
+        records.forEach((rec) => memoryDB.verifications.set(rec.email, rec));
+        return records.sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt));
+      }
+    }
+  } catch (err) {}
+
+  const all = Array.from(memoryDB.verifications.values());
+  return all.sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt));
+}
+
+export async function dbUpdateVerificationStatus(idOrEmail, action, adminNotes = '') {
+  const status = action === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+  const reviewedAt = new Date().toISOString();
+
+  // Find existing record in memory
+  let record = null;
+  let keyFound = null;
+
+  for (const [key, val] of memoryDB.verifications.entries()) {
+    if (val.id === idOrEmail || val.email.toLowerCase() === idOrEmail.toLowerCase()) {
+      record = val;
+      keyFound = key;
+      break;
+    }
+  }
+
+  const defaultNotes = status === 'REJECTED'
+    ? 'Invalid documents try with Original documents'
+    : 'Verified successfully.';
+
+  // If not in memory, fetch from Supabase
+  if (!record) {
+    record = await dbGetVerificationByEmail(idOrEmail);
+  }
+
+  const finalNotes = adminNotes || defaultNotes;
+
+  const updatedRecord = {
+    ...(record || {}),
+    status,
+    adminNotes: finalNotes,
+    reviewedAt,
+  };
+
+  const normEmail = (updatedRecord.email || idOrEmail).toLowerCase();
+  memoryDB.verifications.set(normEmail, updatedRecord);
+
+  // 1. Update in dedicated verifications table if present
+  try {
+    await supabase
+      .from('verifications')
+      .update({
+        status,
+        adminNotes: finalNotes,
+        reviewedAt,
+      })
+      .or(`id.eq.${idOrEmail},email.eq.${idOrEmail}`);
+  } catch (err) {}
+
+  // 2. Persist update row in Supabase database
+  try {
+    const updateId = `doc_${normEmail.replace(/[^a-z0-9]/g, '_')}_${Date.now()}`;
+    const payload = {
+      id: updateId,
+      driver: {
+        type: 'DOC_VERIFICATION',
+        ...updatedRecord,
+      },
+      status: status === 'APPROVED' ? 'VERIFICATION_APPROVED' : 'VERIFICATION_REJECTED',
+    };
+    await supabase.from('rides').insert([payload]);
+  } catch (err) {}
+
+  return updatedRecord;
+}
+

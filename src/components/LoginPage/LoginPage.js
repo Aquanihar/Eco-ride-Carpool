@@ -24,6 +24,8 @@ export default function LoginPage({ onComplete }) {
   const [docVerifying, setDocVerifying] = useState(false);
   const [otpSending, setOtpSending] = useState(false);
   const [otpSuccessMsg, setOtpSuccessMsg] = useState('');
+  const [verificationRecord, setVerificationRecord] = useState(null);
+  const [checkingStatus, setCheckingStatus] = useState(false);
 
   const idProofRef = useRef(null);
   const licenseRef = useRef(null);
@@ -61,50 +63,19 @@ export default function LoginPage({ onComplete }) {
       return;
     }
 
-    const fileNameLower = file.name.toLowerCase();
-    const isDocLikelyValid =
-      fileNameLower.includes('id') ||
-      fileNameLower.includes('proof') ||
-      fileNameLower.includes('aadhaar') ||
-      fileNameLower.includes('pan') ||
-      fileNameLower.includes('license') ||
-      fileNameLower.includes('dl') ||
-      fileNameLower.includes('passport') ||
-      fileNameLower.includes('card') ||
-      fileNameLower.includes('doc') ||
-      file.type === 'application/pdf' ||
-      file.size > 20000;
-
-    if (!isDocLikelyValid) {
-      setErrors((prev) => ({
-        ...prev,
-        [field]: 'Invalid document format or unrecognized ID image. Please upload a clear scan of your ID proof/license.',
-      }));
-      return;
-    }
-
     const previewField = field === 'idProof' ? 'idProofPreview' : 'drivingLicensePreview';
     const nameField = field === 'idProof' ? 'idProofName' : 'drivingLicenseName';
 
-    if (file.type.startsWith('image/')) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        setFormData((prev) => ({
-          ...prev,
-          [field]: file,
-          [previewField]: e.target.result,
-          [nameField]: file.name,
-        }));
-      };
-      reader.readAsDataURL(file);
-    } else {
+    const reader = new FileReader();
+    reader.onload = (e) => {
       setFormData((prev) => ({
         ...prev,
         [field]: file,
-        [previewField]: null,
+        [previewField]: e.target.result,
         [nameField]: file.name,
       }));
-    }
+    };
+    reader.readAsDataURL(file);
 
     if (errors[field]) {
       setErrors((prev) => {
@@ -208,15 +179,70 @@ export default function LoginPage({ onComplete }) {
     }
   };
 
+  const checkVerificationStatus = async () => {
+    if (!formData.email) return;
+    setCheckingStatus(true);
+    try {
+      const res = await fetch(`/api/verification?email=${encodeURIComponent(formData.email.trim())}`);
+      const data = await res.json();
+      if (data.success && data.verification) {
+        setVerificationRecord(data.verification);
+        if (data.verification.status === 'APPROVED') {
+          // Allowed from backend! Proceed to OTP step
+          await requestOtpDispatch();
+          setStep(3);
+        }
+      }
+    } catch (err) {
+      console.error('Error checking verification status:', err);
+    } finally {
+      setCheckingStatus(false);
+    }
+  };
+
   const handleProceedToOtp = async () => {
     if (!validateStep2()) return;
 
     setDocVerifying(true);
-    await new Promise((resolve) => setTimeout(resolve, 800));
-    setDocVerifying(false);
+    setErrors((prev) => ({ ...prev, verification: null }));
 
-    await requestOtpDispatch();
-    setStep(3);
+    try {
+      // Send document scans (Aadhaar & Driving License) to backend database
+      const res = await fetch('/api/verification', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: formData.email.trim(),
+          fullName: formData.fullName.trim(),
+          phone: formData.phone.trim(),
+          idProofBase64: formData.idProofPreview,
+          idProofName: formData.idProofName,
+          drivingLicenseBase64: formData.drivingLicensePreview,
+          drivingLicenseName: formData.drivingLicenseName,
+        }),
+      });
+
+      const data = await res.json();
+      if (!data.success) {
+        setErrors((prev) => ({ ...prev, verification: data.message || 'Failed to submit documents.' }));
+        setDocVerifying(false);
+        return;
+      }
+
+      setVerificationRecord(data.verification);
+
+      if (data.verification.status === 'APPROVED') {
+        // Already approved earlier
+        await requestOtpDispatch();
+        setStep(3);
+      }
+      // If status is PENDING, we do not directly proceed; user sees pending status and can check status
+    } catch (err) {
+      console.error('Document submission error:', err);
+      setErrors((prev) => ({ ...prev, verification: 'Network error submitting documents to database.' }));
+    } finally {
+      setDocVerifying(false);
+    }
   };
 
   const handleBack = () => {
@@ -575,14 +601,101 @@ export default function LoginPage({ onComplete }) {
                   'image/jpeg,image/png,image/webp,application/pdf'
                 )}
 
-                <div className={styles.docNote}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="12" r="10" />
-                    <line x1="12" y1="16" x2="12" y2="12" />
-                    <line x1="12" y1="8" x2="12.01" y2="8" />
-                  </svg>
-                  <p>System automatically checks uploaded scans for valid document signatures and text formatting before proceeding.</p>
-                </div>
+                {/* Verification Error message */}
+                {errors.verification && (
+                  <div className={styles.verifRejectBox}>
+                    <div className={styles.verifRejectHeader}>
+                      <div className={styles.verifRejectIcon}>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="12" cy="12" r="10" />
+                          <line x1="15" y1="9" x2="9" y2="15" />
+                          <line x1="9" y1="9" x2="15" y2="15" />
+                        </svg>
+                      </div>
+                      <span className={styles.verifRejectTitle}>Submission Error</span>
+                    </div>
+                    <p className={styles.verifRejectDesc}>{errors.verification}</p>
+                  </div>
+                )}
+
+                {/* If submitted and status is PENDING */}
+                {verificationRecord && verificationRecord.status === 'PENDING' && (
+                  <div className={styles.verifPendingBox}>
+                    <div className={styles.verifPendingHeader}>
+                      <div className={styles.verifPendingIcon}>
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="12" cy="12" r="10" />
+                          <polyline points="12 6 12 12 16 14" />
+                        </svg>
+                      </div>
+                      <div>
+                        <div className={styles.verifPendingTitle}>Documents Under Review</div>
+                        <div style={{ fontSize: '0.78rem', color: '#b45309' }}>Submitted to database for backend verification</div>
+                      </div>
+                    </div>
+                    <p className={styles.verifPendingDesc}>
+                      Your Aadhaar card and driving license have been sent to the backend database.
+                      An administrator will verify if they are legitimate documents. Once allowed from the backend, verification will complete.
+                    </p>
+                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                      <button
+                        type="button"
+                        className={styles.secondaryBtn}
+                        style={{ padding: '8px 16px', fontSize: '0.84rem' }}
+                        onClick={checkVerificationStatus}
+                        disabled={checkingStatus}
+                      >
+                        {checkingStatus ? 'Checking...' : 'Check Verification Status'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* If backend rejected: Show exact message requested: Invalid documents try with Original documents */}
+                {verificationRecord && verificationRecord.status === 'REJECTED' && (
+                  <div className={styles.verifRejectBox}>
+                    <div className={styles.verifRejectHeader}>
+                      <div className={styles.verifRejectIcon}>
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="12" cy="12" r="10" />
+                          <line x1="15" y1="9" x2="9" y2="15" />
+                          <line x1="9" y1="9" x2="15" y2="15" />
+                        </svg>
+                      </div>
+                      <div>
+                        <div className={styles.verifRejectTitle}>Document Verification Failed</div>
+                        <div style={{ fontSize: '0.78rem', color: '#b91c1c' }}>Rejected by Backend Admin</div>
+                      </div>
+                    </div>
+                    <p className={styles.verifRejectDesc}>
+                      {verificationRecord.adminNotes || 'Invalid documents try with Original documents'}
+                    </p>
+                    <div style={{ fontSize: '0.8rem', color: '#991b1b' }}>
+                      Please re-upload clear, authentic scans of your original Aadhaar card and Driving License above and re-submit.
+                    </div>
+                  </div>
+                )}
+
+                {/* If backend approved */}
+                {verificationRecord && verificationRecord.status === 'APPROVED' && (
+                  <div className={styles.verifSuccessBox}>
+                    <div className={styles.verifSuccessHeader}>
+                      <div className={styles.verifSuccessIcon}>
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                          <polyline points="22 4 12 14.01 9 11.01" />
+                        </svg>
+                      </div>
+                      <div>
+                        <div className={styles.verifSuccessTitle}>Documents Allowed & Verified!</div>
+                        <div style={{ fontSize: '0.78rem', color: '#047857' }}>Backend approved successfully</div>
+                      </div>
+                    </div>
+                    <p className={styles.verifSuccessDesc}>
+                      Your Aadhaar card and driving license have been reviewed and verified by backend. You can now proceed to email OTP verification.
+                    </p>
+                  </div>
+                )}
 
                 <div className={styles.formActions}>
                   <button
@@ -592,26 +705,59 @@ export default function LoginPage({ onComplete }) {
                   >
                     Back
                   </button>
-                  <button
-                    type="button"
-                    className={`${styles.primaryBtn} ${docVerifying ? styles.btnLoading : ''}`}
-                    onClick={handleProceedToOtp}
-                    disabled={docVerifying}
-                  >
-                    {docVerifying ? (
-                      <>
-                        <span className={styles.spinner} />
-                        Checking Scans...
-                      </>
-                    ) : (
-                      <>
-                        Send OTP to Email
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="20 6 9 17 4 12" />
-                        </svg>
-                      </>
-                    )}
-                  </button>
+
+                  {(!verificationRecord || verificationRecord.status === 'REJECTED') ? (
+                    <button
+                      type="button"
+                      className={`${styles.primaryBtn} ${docVerifying ? styles.btnLoading : ''}`}
+                      onClick={handleProceedToOtp}
+                      disabled={docVerifying}
+                    >
+                      {docVerifying ? (
+                        <>
+                          <span className={styles.spinner} />
+                          Sending to Database...
+                        </>
+                      ) : (
+                        <>
+                          Submit Documents for Verification
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                        </>
+                      )}
+                    </button>
+                  ) : verificationRecord.status === 'PENDING' ? (
+                    <button
+                      type="button"
+                      className={`${styles.primaryBtn} ${checkingStatus ? styles.btnLoading : ''}`}
+                      onClick={checkVerificationStatus}
+                      disabled={checkingStatus}
+                    >
+                      {checkingStatus ? 'Checking Backend...' : 'Check Backend Status'}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className={styles.primaryBtn}
+                      onClick={() => {
+                        requestOtpDispatch();
+                        setStep(3);
+                      }}
+                    >
+                      Proceed to Email OTP
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+
+                <div className={styles.adminHelperLink}>
+                  <span>Are you an administrator? </span>
+                  <a href="/admin/verifications" target="_blank" rel="noreferrer">
+                    Open Backend Verification Portal ↗
+                  </a>
                 </div>
               </div>
             )}

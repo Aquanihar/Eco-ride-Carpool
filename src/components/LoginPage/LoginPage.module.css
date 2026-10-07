@@ -896,3 +896,142 @@
     min-height: 52px;
   }
 }
+
+/* Verification Status Styles */
+.verifPendingBox {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: var(--radius-lg);
+  margin-bottom: 20px;
+}
+
+.verifPendingHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.verifPendingIcon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(245, 158, 11, 0.15);
+  color: #d97706;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.verifPendingTitle {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #d97706;
+}
+
+.verifPendingDesc {
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.verifRejectBox {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  border-radius: var(--radius-lg);
+  margin-bottom: 20px;
+}
+
+.verifRejectHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.verifRejectIcon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(239, 68, 68, 0.15);
+  color: #dc2626;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.verifRejectTitle {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #dc2626;
+}
+
+.verifRejectDesc {
+  font-size: 0.88rem;
+  color: #b91c1c;
+  line-height: 1.5;
+  font-weight: 500;
+}
+
+.verifSuccessBox {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: var(--radius-lg);
+  margin-bottom: 20px;
+}
+
+.verifSuccessHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.verifSuccessIcon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(16, 185, 129, 0.15);
+  color: #059669;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.verifSuccessTitle {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #059669;
+}
+
+.verifSuccessDesc {
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.adminHelperLink {
+  margin-top: 16px;
+  font-size: 0.8rem;
+  text-align: center;
+  color: var(--text-tertiary);
+}
+
+.adminHelperLink a {
+  color: var(--primary-500);
+  text-decoration: underline;
+  font-weight: 600;
+}
+
