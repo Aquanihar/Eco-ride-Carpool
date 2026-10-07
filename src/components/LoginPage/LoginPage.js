@@ -752,13 +752,6 @@ export default function LoginPage({ onComplete }) {
                     </button>
                   )}
                 </div>
-
-                <div className={styles.adminHelperLink}>
-                  <span>Are you an administrator? </span>
-                  <a href="/admin/verifications" target="_blank" rel="noreferrer">
-                    Open Backend Verification Portal ↗
-                  </a>
-                </div>
               </div>
             )}
 

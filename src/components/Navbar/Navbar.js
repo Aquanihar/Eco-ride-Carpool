@@ -55,9 +55,6 @@ export default function Navbar() {
             <Link href="/my-rides" className={styles.link}>
               <Car size={16} /> My Rides
             </Link>
-            <Link href="/admin/verifications" className={styles.link} title="Backend Document Verification Portal">
-              <Shield size={16} /> Admin Portal
-            </Link>
           </div>
 
           {/* Actions */}
