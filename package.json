@@ -7,7 +7,9 @@
     "dev": "next dev -H 0.0.0.0",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "backend:java": "powershell -ExecutionPolicy Bypass -File backend-java/run.ps1",
+    "test:java": "javac -d backend-java/bin (Get-ChildItem -Path backend-java/src -Filter *.java -Recurse | Select-Object -ExpandProperty FullName) && java -cp backend-java/bin com.raahi.carpool.test.RideBackendTest"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",

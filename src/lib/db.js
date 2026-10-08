@@ -91,6 +91,36 @@ const sampleRides = [
 
 sampleRides.forEach((r) => memoryDB.rides.set(r.id, r));
 
+// Seed sample pending request so user can immediately test accepting a ride
+const sampleReq = {
+  id: 'req_sample_1',
+  ride_id: 'r1',
+  passenger_id: 'u_passenger_demo',
+  passenger_name: 'Pooja Verma',
+  passenger_rating: 4.9,
+  seats_requested: 1,
+  pickup_location: 'DN Nagar Metro, Andheri',
+  drop_location: 'BKC Diamond Bourse',
+  message: 'Office commute — 1 seat needed please!',
+  status: 'PENDING',
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString(),
+};
+memoryDB.rideRequests.set(sampleReq.id, sampleReq);
+
+const sampleNotif = {
+  id: 'n_sample_1',
+  user_id: 'u_passenger_demo',
+  type: 'match',
+  title: 'New Ride Request 🚗',
+  message: 'You have a pending request from Pooja Verma for 1 seat on Andheri West → Bandra Kurla Complex.',
+  related_ride_id: 'r1',
+  related_request_id: 'req_sample_1',
+  is_read: false,
+  created_at: new Date().toISOString(),
+};
+memoryDB.notifications.set(sampleNotif.id, sampleNotif);
+
 /* Helper: Check if departure has passed */
 export function isDeparturePassed(dateStr, timeStr) {
   if (!dateStr || !timeStr) return false;

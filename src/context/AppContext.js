@@ -298,6 +298,7 @@ export function AppProvider({ children }) {
         cancelBooking,
         cancelRide,
         fetchRides,
+        fetchNotifications,
         markNotificationRead,
       }}
     >

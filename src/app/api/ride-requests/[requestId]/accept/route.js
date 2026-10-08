@@ -1,9 +1,16 @@
 import { dbAcceptRideRequest } from '@/lib/db';
 import { getAuthUser, successResponse, errorResponse } from '@/lib/auth';
+import { forwardToJavaBackend } from '@/lib/javaBackendBridge';
 
 export async function POST(req, { params }) {
   try {
     const { requestId } = await params;
+
+    const javaRes = await forwardToJavaBackend(req, `/api/ride-requests/${requestId}/accept`);
+    if (javaRes.forwarded && javaRes.data) {
+      return Response.json(javaRes.data, { status: javaRes.status });
+    }
+
     const auth = getAuthUser(req);
     const body = await req.json().catch(() => ({}));
 

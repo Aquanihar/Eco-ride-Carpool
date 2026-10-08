@@ -7,11 +7,17 @@ import {
   dbCreateNotification,
 } from '@/lib/db';
 import { getAuthUser, successResponse, errorResponse } from '@/lib/auth';
+import { forwardToJavaBackend } from '@/lib/javaBackendBridge';
 
 // POST /api/rides/[rideId]/requests -> Passenger sends request
 export async function POST(req, { params }) {
   try {
     const { rideId } = await params;
+
+    const javaRes = await forwardToJavaBackend(req, `/api/rides/${rideId}/requests`);
+    if (javaRes.forwarded && javaRes.data) {
+      return Response.json(javaRes.data, { status: javaRes.status });
+    }
     const auth = getAuthUser(req);
     const body = await req.json();
 
@@ -111,6 +117,12 @@ export async function POST(req, { params }) {
 export async function GET(req, { params }) {
   try {
     const { rideId } = await params;
+
+    const javaRes = await forwardToJavaBackend(req, `/api/rides/${rideId}/requests`);
+    if (javaRes.forwarded && javaRes.data) {
+      return Response.json(javaRes.data, { status: javaRes.status });
+    }
+
     const auth = getAuthUser(req);
     const { searchParams } = new URL(req.url);
 
@@ -121,7 +133,8 @@ export async function GET(req, { params }) {
 
     // Authorization: Only ride driver can view requests
     const requestingUserId = auth ? auth.id : searchParams.get('driverId');
-    if (ride.driver_id !== requestingUserId) {
+    const rideDriverId = ride.driver_id || ride.driver?.id;
+    if (requestingUserId && rideDriverId && rideDriverId !== requestingUserId) {
       return errorResponse('Unauthorized: Only the driver of this ride can view requests.', 403, 'FORBIDDEN');
     }
 
