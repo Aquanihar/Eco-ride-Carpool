@@ -53,7 +53,7 @@ function saveVerificationsToFile() {
 // Initial load of verifications
 loadVerificationsFromFile();
 
-async function withTimeout(promise, ms = 1500) {
+async function withTimeout(promise, ms = 6000) {
   let timeoutId;
   const timeoutPromise = new Promise((_, reject) => {
     timeoutId = setTimeout(() => reject(new Error('Supabase request timeout')), ms);
@@ -827,10 +827,6 @@ export async function dbGetVerificationByEmail(email) {
   const normEmail = (email || '').trim().toLowerCase();
   loadVerificationsFromFile();
 
-  if (memoryDB.verifications.has(normEmail)) {
-    return memoryDB.verifications.get(normEmail);
-  }
-
   // 1. Check dedicated verifications table with timeout
   try {
     const { data } = await withTimeout(
@@ -841,7 +837,7 @@ export async function dbGetVerificationByEmail(email) {
         .order('submittedAt', { ascending: false })
         .limit(1)
         .single(),
-      1500
+      4000
     );
     if (data) {
       memoryDB.verifications.set(normEmail, data);
@@ -856,20 +852,40 @@ export async function dbGetVerificationByEmail(email) {
       supabase
         .from('rides')
         .select('*')
-        .ilike('status', 'VERIFICATION_%')
-        .filter('driver->>email', 'eq', normEmail)
-        .order('id', { ascending: false })
-        .limit(1),
-      1500
+        .ilike('status', 'VERIFICATION_%'),
+      6000
     );
 
-    if (rows && rows.length > 0 && rows[0].driver && rows[0].driver.type === 'DOC_VERIFICATION') {
-      const rec = rows[0].driver;
-      memoryDB.verifications.set(normEmail, rec);
-      saveVerificationsToFile();
-      return rec;
+    if (rows && rows.length > 0) {
+      const userRows = rows.filter(
+        (r) => r.driver && (r.driver.email || '').toLowerCase().trim() === normEmail
+      );
+      if (userRows.length > 0) {
+        const sorted = userRows.sort((a, b) => {
+          const timeA = new Date(a.driver?.submittedAt || a.driver?.reviewedAt || 0).getTime();
+          const timeB = new Date(b.driver?.submittedAt || b.driver?.reviewedAt || 0).getTime();
+          return timeB - timeA;
+        });
+        const top = sorted[0];
+        const status = top.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
+          : top.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
+          : (top.driver.status || 'PENDING');
+        const rec = {
+          ...top.driver,
+          id: top.driver.id || top.id,
+          status,
+          rowId: top.id,
+        };
+        memoryDB.verifications.set(normEmail, rec);
+        saveVerificationsToFile();
+        return rec;
+      }
     }
   } catch (err) {}
+
+  if (memoryDB.verifications.has(normEmail)) {
+    return memoryDB.verifications.get(normEmail);
+  }
 
   return null;
 }
@@ -878,13 +894,6 @@ export async function dbGetAllVerifications() {
   loadVerificationsFromFile();
   const emailMap = new Map();
 
-  // Load existing records from memory/disk first
-  for (const [key, val] of memoryDB.verifications.entries()) {
-    if (val && val.email) {
-      emailMap.set(val.email.toLowerCase(), val);
-    }
-  }
-
   // 1. Check dedicated verifications table with timeout
   try {
     const { data } = await withTimeout(
@@ -892,7 +901,7 @@ export async function dbGetAllVerifications() {
         .from('verifications')
         .select('*')
         .order('submittedAt', { ascending: false }),
-      1500
+      4000
     );
     if (data && data.length > 0) {
       data.forEach((d) => {
@@ -907,27 +916,47 @@ export async function dbGetAllVerifications() {
       supabase
         .from('rides')
         .select('*')
-        .ilike('status', 'VERIFICATION_%')
-        .order('id', { ascending: false }),
-      1500
+        .ilike('status', 'VERIFICATION_%'),
+      6000
     );
 
     if (rideRows && rideRows.length > 0) {
-      rideRows.forEach((r) => {
-        if (r.driver && r.driver.type === 'DOC_VERIFICATION' && r.driver.email) {
-          const userEmail = r.driver.email.toLowerCase();
-          if (!emailMap.has(userEmail)) {
-            emailMap.set(userEmail, r.driver);
+      const sortedRows = rideRows.sort((a, b) => {
+        const timeA = new Date(a.driver?.submittedAt || a.driver?.reviewedAt || 0).getTime();
+        const timeB = new Date(b.driver?.submittedAt || b.driver?.reviewedAt || 0).getTime();
+        return timeB - timeA;
+      });
+
+      sortedRows.forEach((r) => {
+        if (r.driver && (r.driver.type === 'DOC_VERIFICATION' || r.driver.email)) {
+          const userEmail = (r.driver.email || '').toLowerCase().trim();
+          if (userEmail && !emailMap.has(userEmail)) {
+            const status = r.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
+              : r.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
+              : (r.driver.status || 'PENDING');
+            emailMap.set(userEmail, {
+              ...r.driver,
+              id: r.driver.id || r.id,
+              status,
+              rowId: r.id,
+            });
           }
         }
       });
     }
   } catch (err) {}
 
+  // 3. Fallback to local memory / disk records
+  for (const [key, val] of memoryDB.verifications.entries()) {
+    if (val && val.email && !emailMap.has(val.email.toLowerCase())) {
+      emailMap.set(val.email.toLowerCase(), val);
+    }
+  }
+
   const all = Array.from(emailMap.values());
   all.forEach((rec) => memoryDB.verifications.set(rec.email.toLowerCase(), rec));
   saveVerificationsToFile();
-  return all.sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt));
+  return all.sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0));
 }
 
 export async function dbUpdateVerificationStatus(idOrEmail, action, adminNotes = '') {

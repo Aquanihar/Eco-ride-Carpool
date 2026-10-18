@@ -17,6 +17,7 @@ import {
   Calendar,
 } from 'lucide-react';
 import { AppProvider } from '@/context/AppContext';
+import { supabase } from '@/lib/supabase';
 import styles from './admin.module.css';
 
 function AdminContent() {
@@ -29,11 +30,60 @@ function AdminContent() {
   const fetchVerifications = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/verification');
-      const data = await res.json();
-      if (data.success && data.verifications) {
-        setVerifications(data.verifications);
+      const emailMap = new Map();
+
+      // 1. Direct fetch from Supabase rides cloud table
+      try {
+        const { data: rideRows } = await supabase
+          .from('rides')
+          .select('*')
+          .ilike('status', 'VERIFICATION_%');
+
+        if (rideRows && rideRows.length > 0) {
+          const sortedRows = rideRows.sort((a, b) => {
+            const timeA = new Date(a.driver?.submittedAt || a.driver?.reviewedAt || 0).getTime();
+            const timeB = new Date(b.driver?.submittedAt || b.driver?.reviewedAt || 0).getTime();
+            return timeB - timeA;
+          });
+
+          sortedRows.forEach((r) => {
+            if (r.driver && (r.driver.type === 'DOC_VERIFICATION' || r.driver.email)) {
+              const userEmail = (r.driver.email || '').toLowerCase().trim();
+              if (userEmail && !emailMap.has(userEmail)) {
+                const status = r.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
+                  : r.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
+                  : (r.driver.status || 'PENDING');
+                emailMap.set(userEmail, {
+                  ...r.driver,
+                  id: r.driver.id || r.id,
+                  status,
+                  rowId: r.id,
+                });
+              }
+            }
+          });
+        }
+      } catch (err) {
+        console.error('Supabase admin fetch error:', err);
       }
+
+      // 2. Also merge from API route
+      try {
+        const res = await fetch('/api/verification');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.verifications && Array.isArray(data.verifications)) {
+            data.verifications.forEach((v) => {
+              if (v && v.email && !emailMap.has(v.email.toLowerCase())) {
+                emailMap.set(v.email.toLowerCase(), v);
+              }
+            });
+          }
+        }
+      } catch (e) {}
+
+      const list = Array.from(emailMap.values());
+      setVerifications(list.sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0)));
     } catch (err) {
       console.error('Failed to fetch verifications:', err);
     } finally {
@@ -49,20 +99,52 @@ function AdminContent() {
 
   const handleReview = async (id, action) => {
     const note = adminNotes[id] || (action === 'REJECT' ? 'Invalid documents. Try with original documents.' : 'Approved by admin review.');
+    const reviewedAt = new Date().toISOString();
     setActionInProgress((prev) => ({ ...prev, [id]: true }));
 
+    // Optimistically update UI
+    setVerifications((prev) =>
+      prev.map((v) =>
+        v.id === id || v.email === id
+          ? { ...v, status: action === 'APPROVE' ? 'APPROVED' : 'REJECTED', adminNotes: note, reviewedAt }
+          : v
+      )
+    );
+
     try {
-      const res = await fetch(`/api/verification/${id}/review`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, adminNotes: note }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        await fetchVerifications();
-      } else {
-        alert(data.message || 'Action failed');
+      const item = verifications.find((v) => v.id === id || v.email === id);
+      const normEmail = (item?.email || id).toLowerCase();
+      const updateId = `doc_${normEmail.replace(/[^a-z0-9]/g, '_')}_${Date.now()}`;
+
+      // 1. Direct write to Supabase
+      try {
+        await supabase.from('rides').insert([
+          {
+            id: updateId,
+            driver: {
+              type: 'DOC_VERIFICATION',
+              ...(item || {}),
+              status: action === 'APPROVE' ? 'APPROVED' : 'REJECTED',
+              adminNotes: note,
+              reviewedAt,
+            },
+            status: action === 'APPROVE' ? 'VERIFICATION_APPROVED' : 'VERIFICATION_REJECTED',
+          },
+        ]);
+      } catch (sbErr) {
+        console.error('Supabase admin review insert error:', sbErr);
       }
+
+      // 2. Also call API route
+      try {
+        await fetch(`/api/verification/${id}/review`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action, adminNotes: note }),
+        });
+      } catch (e) {}
+
+      await fetchVerifications();
     } catch (err) {
       console.error('Error updating review:', err);
       alert('Error updating review status.');
