@@ -1,5 +1,15 @@
 import { dbUpdateVerificationStatus } from '@/lib/db';
 
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
+export async function OPTIONS() {
+  return new Response(null, { status: 204, headers: corsHeaders });
+}
+
 export async function POST(req, { params }) {
   try {
     const { id } = await params;
@@ -7,25 +17,37 @@ export async function POST(req, { params }) {
     const { action, adminNotes } = body;
 
     if (!['APPROVE', 'REJECT'].includes(action)) {
-      return Response.json({
-        success: false,
-        message: 'Invalid action. Must be APPROVE or REJECT.',
-      }, { status: 400 });
+      return Response.json(
+        {
+          success: false,
+          message: 'Invalid action. Must be APPROVE or REJECT.',
+        },
+        { status: 400, headers: corsHeaders }
+      );
     }
 
     const updated = await dbUpdateVerificationStatus(id, action, adminNotes);
 
     if (!updated) {
-      return Response.json({ success: false, message: 'Verification record not found.' }, { status: 404 });
+      return Response.json(
+        { success: false, message: 'Verification record not found.' },
+        { status: 404, headers: corsHeaders }
+      );
     }
 
-    return Response.json({
-      success: true,
-      message: action === 'APPROVE' ? 'Document verified and approved successfully!' : 'Document rejected.',
-      verification: updated,
-    });
+    return Response.json(
+      {
+        success: true,
+        message: action === 'APPROVE' ? 'Document verified and approved successfully!' : 'Document rejected.',
+        verification: updated,
+      },
+      { headers: corsHeaders }
+    );
   } catch (error) {
     console.error('Error updating verification status:', error);
-    return Response.json({ success: false, message: error.message }, { status: 500 });
+    return Response.json(
+      { success: false, message: error.message },
+      { status: 500, headers: corsHeaders }
+    );
   }
 }

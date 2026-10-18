@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { supabase } from './supabase.js';
 
 // In-memory store for fallback mode when Supabase DB tables aren't migrated
@@ -14,6 +16,56 @@ if (process.env.NODE_ENV !== 'production') {
   globalThis.__raahi_memory_db = globalStore;
 }
 const memoryDB = globalStore;
+
+const DATA_DIR = path.join(process.cwd(), 'data');
+const VERIFICATIONS_FILE = path.join(DATA_DIR, 'verifications.json');
+
+function loadVerificationsFromFile() {
+  try {
+    if (fs.existsSync(VERIFICATIONS_FILE)) {
+      const content = fs.readFileSync(VERIFICATIONS_FILE, 'utf8');
+      const list = JSON.parse(content);
+      if (Array.isArray(list)) {
+        list.forEach((rec) => {
+          if (rec && rec.email) {
+            memoryDB.verifications.set(rec.email.toLowerCase(), rec);
+          }
+        });
+      }
+    }
+  } catch (e) {
+    console.error('Error loading verifications from file:', e.message);
+  }
+}
+
+function saveVerificationsToFile() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    const list = Array.from(memoryDB.verifications.values());
+    fs.writeFileSync(VERIFICATIONS_FILE, JSON.stringify(list, null, 2), 'utf8');
+  } catch (e) {
+    console.error('Error saving verifications to file:', e.message);
+  }
+}
+
+// Initial load of verifications
+loadVerificationsFromFile();
+
+async function withTimeout(promise, ms = 1500) {
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error('Supabase request timeout')), ms);
+  });
+  return Promise.race([
+    promise.then((res) => {
+      clearTimeout(timeoutId);
+      return res;
+    }),
+    timeoutPromise,
+  ]);
+}
 
 // Seed sample rides in memory DB
 const sampleRides = [
@@ -734,20 +786,28 @@ export async function dbCreateDocumentVerification(data) {
     reviewedAt: null,
   };
 
-  // 1. Try storing in dedicated Supabase 'verifications' table if created
+  // Persist locally in memory and disk file immediately
+  memoryDB.verifications.set(normEmail, record);
+  saveVerificationsToFile();
+
+  // Try storing in dedicated Supabase 'verifications' table with timeout
   try {
-    const { data: inserted, error } = await supabase
-      .from('verifications')
-      .upsert([record], { onConflict: 'email' })
-      .select()
-      .single();
+    const { data: inserted, error } = await withTimeout(
+      supabase
+        .from('verifications')
+        .upsert([record], { onConflict: 'email' })
+        .select()
+        .single(),
+      1500
+    );
     if (inserted && !error) {
       memoryDB.verifications.set(normEmail, inserted);
+      saveVerificationsToFile();
       return inserted;
     }
   } catch (err) {}
 
-  // 2. Persist directly in Supabase database ('rides' table storage)
+  // Try storing in Supabase rides table with timeout
   try {
     const payload = {
       id: id,
@@ -757,75 +817,100 @@ export async function dbCreateDocumentVerification(data) {
       },
       status: 'VERIFICATION_PENDING',
     };
-    const { error: rideErr } = await supabase.from('rides').insert([payload]);
-    if (!rideErr) {
-      memoryDB.verifications.set(normEmail, record);
-      return record;
-    }
+    await withTimeout(supabase.from('rides').insert([payload]), 1500);
   } catch (err) {}
 
-  memoryDB.verifications.set(normEmail, record);
   return record;
 }
 
 export async function dbGetVerificationByEmail(email) {
   const normEmail = (email || '').trim().toLowerCase();
-
-  // 1. Check dedicated verifications table
-  try {
-    const { data } = await supabase
-      .from('verifications')
-      .select('*')
-      .eq('email', normEmail)
-      .order('submittedAt', { ascending: false })
-      .limit(1)
-      .single();
-    if (data) return data;
-  } catch (err) {}
-
-  // 2. Check Supabase rides storage (fetches latest record for this user)
-  try {
-    const { data: rows } = await supabase
-      .from('rides')
-      .select('*')
-      .ilike('status', 'VERIFICATION_%')
-      .filter('driver->>email', 'eq', normEmail)
-      .order('id', { ascending: false })
-      .limit(1);
-
-    if (rows && rows.length > 0 && rows[0].driver && rows[0].driver.type === 'DOC_VERIFICATION') {
-      const rec = rows[0].driver;
-      memoryDB.verifications.set(normEmail, rec);
-      return rec;
-    }
-  } catch (err) {}
+  loadVerificationsFromFile();
 
   if (memoryDB.verifications.has(normEmail)) {
     return memoryDB.verifications.get(normEmail);
   }
 
+  // 1. Check dedicated verifications table with timeout
+  try {
+    const { data } = await withTimeout(
+      supabase
+        .from('verifications')
+        .select('*')
+        .eq('email', normEmail)
+        .order('submittedAt', { ascending: false })
+        .limit(1)
+        .single(),
+      1500
+    );
+    if (data) {
+      memoryDB.verifications.set(normEmail, data);
+      saveVerificationsToFile();
+      return data;
+    }
+  } catch (err) {}
+
+  // 2. Check Supabase rides storage with timeout
+  try {
+    const { data: rows } = await withTimeout(
+      supabase
+        .from('rides')
+        .select('*')
+        .ilike('status', 'VERIFICATION_%')
+        .filter('driver->>email', 'eq', normEmail)
+        .order('id', { ascending: false })
+        .limit(1),
+      1500
+    );
+
+    if (rows && rows.length > 0 && rows[0].driver && rows[0].driver.type === 'DOC_VERIFICATION') {
+      const rec = rows[0].driver;
+      memoryDB.verifications.set(normEmail, rec);
+      saveVerificationsToFile();
+      return rec;
+    }
+  } catch (err) {}
+
   return null;
 }
 
 export async function dbGetAllVerifications() {
+  loadVerificationsFromFile();
   const emailMap = new Map();
 
-  // 1. Check dedicated verifications table
+  // Load existing records from memory/disk first
+  for (const [key, val] of memoryDB.verifications.entries()) {
+    if (val && val.email) {
+      emailMap.set(val.email.toLowerCase(), val);
+    }
+  }
+
+  // 1. Check dedicated verifications table with timeout
   try {
-    const { data } = await supabase
-      .from('verifications')
-      .select('*')
-      .order('submittedAt', { ascending: false });
-    if (data && data.length > 0) return data;
+    const { data } = await withTimeout(
+      supabase
+        .from('verifications')
+        .select('*')
+        .order('submittedAt', { ascending: false }),
+      1500
+    );
+    if (data && data.length > 0) {
+      data.forEach((d) => {
+        if (d && d.email) emailMap.set(d.email.toLowerCase(), d);
+      });
+    }
   } catch (err) {}
 
-  // 2. Check Supabase rides database (aggregates latest per user)
+  // 2. Check Supabase rides database with timeout
   try {
-    const { data: rideRows } = await supabase
-      .from('rides')
-      .select('*')
-      .ilike('status', 'VERIFICATION_%')
-      .order('id', { ascending: false });
+    const { data: rideRows } = await withTimeout(
+      supabase
+        .from('rides')
+        .select('*')
+        .ilike('status', 'VERIFICATION_%')
+        .order('id', { ascending: false }),
+      1500
+    );
 
     if (rideRows && rideRows.length > 0) {
       rideRows.forEach((r) => {
@@ -836,31 +921,25 @@ export async function dbGetAllVerifications() {
           }
         }
       });
-
-      if (emailMap.size > 0) {
-        const records = Array.from(emailMap.values());
-        records.forEach((rec) => memoryDB.verifications.set(rec.email, rec));
-        return records.sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt));
-      }
     }
   } catch (err) {}
 
-  const all = Array.from(memoryDB.verifications.values());
+  const all = Array.from(emailMap.values());
+  all.forEach((rec) => memoryDB.verifications.set(rec.email.toLowerCase(), rec));
+  saveVerificationsToFile();
   return all.sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt));
 }
 
 export async function dbUpdateVerificationStatus(idOrEmail, action, adminNotes = '') {
+  loadVerificationsFromFile();
   const status = action === 'APPROVE' ? 'APPROVED' : 'REJECTED';
   const reviewedAt = new Date().toISOString();
 
   // Find existing record in memory
   let record = null;
-  let keyFound = null;
-
-  for (const [key, val] of memoryDB.verifications.entries()) {
+  for (const [, val] of memoryDB.verifications.entries()) {
     if (val.id === idOrEmail || val.email.toLowerCase() === idOrEmail.toLowerCase()) {
       record = val;
-      keyFound = key;
       break;
     }
   }
@@ -885,20 +964,24 @@ export async function dbUpdateVerificationStatus(idOrEmail, action, adminNotes =
 
   const normEmail = (updatedRecord.email || idOrEmail).toLowerCase();
   memoryDB.verifications.set(normEmail, updatedRecord);
+  saveVerificationsToFile();
 
-  // 1. Update in dedicated verifications table if present
+  // 1. Update in dedicated verifications table with timeout
   try {
-    await supabase
-      .from('verifications')
-      .update({
-        status,
-        adminNotes: finalNotes,
-        reviewedAt,
-      })
-      .or(`id.eq.${idOrEmail},email.eq.${idOrEmail}`);
+    await withTimeout(
+      supabase
+        .from('verifications')
+        .update({
+          status,
+          adminNotes: finalNotes,
+          reviewedAt,
+        })
+        .or(`id.eq.${idOrEmail},email.eq.${idOrEmail}`),
+      1500
+    );
   } catch (err) {}
 
-  // 2. Persist update row in Supabase database
+  // 2. Persist update row in Supabase database with timeout
   try {
     const updateId = `doc_${normEmail.replace(/[^a-z0-9]/g, '_')}_${Date.now()}`;
     const payload = {
@@ -909,7 +992,7 @@ export async function dbUpdateVerificationStatus(idOrEmail, action, adminNotes =
       },
       status: status === 'APPROVED' ? 'VERIFICATION_APPROVED' : 'VERIFICATION_REJECTED',
     };
-    await supabase.from('rides').insert([payload]);
+    await withTimeout(supabase.from('rides').insert([payload]), 1500);
   } catch (err) {}
 
   return updatedRecord;
