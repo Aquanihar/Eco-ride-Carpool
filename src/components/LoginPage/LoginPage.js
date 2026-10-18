@@ -210,9 +210,23 @@ export default function LoginPage({ onComplete }) {
     }
   };
 
-  const handleNextStep = () => {
+  const handleNextStep = async () => {
     if (step === 1 && validateStep1()) {
       setStep(2);
+      // Check if email already has verification submitted or approved in cloud DB
+      if (formData.email) {
+        try {
+          const res = await fetch(`/api/verification?email=${encodeURIComponent(formData.email.trim())}`);
+          const data = await res.json();
+          if (data.success && data.verification && data.verification.status !== 'NOT_SUBMITTED') {
+            setVerificationRecord(data.verification);
+            if (data.verification.status === 'APPROVED') {
+              await requestOtpDispatch();
+              setStep(3);
+            }
+          }
+        } catch (e) {}
+      }
     }
   };
 
@@ -236,6 +250,27 @@ export default function LoginPage({ onComplete }) {
       setCheckingStatus(false);
     }
   };
+
+  // Auto-poll verification status every 3 seconds while on Step 2 in PENDING status
+  useEffect(() => {
+    if (step !== 2 || !verificationRecord || verificationRecord.status !== 'PENDING' || !formData.email) {
+      return;
+    }
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/verification?email=${encodeURIComponent(formData.email.trim())}`);
+        const data = await res.json();
+        if (data.success && data.verification) {
+          setVerificationRecord(data.verification);
+          if (data.verification.status === 'APPROVED') {
+            await requestOtpDispatch();
+            setStep(3);
+          }
+        }
+      } catch (err) {}
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [step, verificationRecord?.status, formData.email]);
 
   const handleProceedToOtp = async () => {
     if (!validateStep2()) return;
