@@ -210,23 +210,10 @@ export default function LoginPage({ onComplete }) {
     }
   };
 
-  const handleNextStep = async () => {
+  const handleNextStep = () => {
     if (step === 1 && validateStep1()) {
+      setVerificationRecord(null);
       setStep(2);
-      // Check if email already has verification submitted or approved in cloud DB
-      if (formData.email) {
-        try {
-          const res = await fetch(`/api/verification?email=${encodeURIComponent(formData.email.trim())}`);
-          const data = await res.json();
-          if (data.success && data.verification && data.verification.status !== 'NOT_SUBMITTED') {
-            setVerificationRecord(data.verification);
-            if (data.verification.status === 'APPROVED') {
-              await requestOtpDispatch();
-              setStep(3);
-            }
-          }
-        } catch (e) {}
-      }
     }
   };
 
