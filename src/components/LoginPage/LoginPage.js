@@ -66,16 +66,53 @@ export default function LoginPage({ onComplete }) {
     const previewField = field === 'idProof' ? 'idProofPreview' : 'drivingLicensePreview';
     const nameField = field === 'idProof' ? 'idProofName' : 'drivingLicenseName';
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
+    const processFile = (fileDataUrl, fileObj) => {
       setFormData((prev) => ({
         ...prev,
-        [field]: file,
-        [previewField]: e.target.result,
-        [nameField]: file.name,
+        [field]: fileObj,
+        [previewField]: fileDataUrl,
+        [nameField]: fileObj.name,
       }));
     };
-    reader.readAsDataURL(file);
+
+    if (file.type && file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const maxDim = 1200;
+          let width = img.width;
+          let height = img.height;
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          processFile(compressedDataUrl, file);
+        };
+        img.onerror = () => {
+          processFile(e.target.result, file);
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    } else {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        processFile(e.target.result, file);
+      };
+      reader.readAsDataURL(file);
+    }
 
     if (errors[field]) {
       setErrors((prev) => {
@@ -751,6 +788,13 @@ export default function LoginPage({ onComplete }) {
                       </svg>
                     </button>
                   )}
+                </div>
+
+                <div className={styles.adminHelperLink}>
+                  <span>Are you an administrator? </span>
+                  <a href="/admin/verifications" target="_blank" rel="noreferrer">
+                    Open Backend Verification Portal ↗
+                  </a>
                 </div>
               </div>
             )}
