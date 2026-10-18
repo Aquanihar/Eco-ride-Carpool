@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import CarpoolCarousel from '@/components/CarpoolCarousel/CarpoolCarousel';
 import styles from './LoginPage.module.css';
 
