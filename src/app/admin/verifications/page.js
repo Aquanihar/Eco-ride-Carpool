@@ -283,16 +283,29 @@ function AdminContent() {
 
       // 1. Direct write to Supabase
       try {
-        await supabase.from('rides').insert([
-          {
-            id: updateId,
-            driver: {
-              type: 'DOC_VERIFICATION',
-              ...updatedDriver,
-            },
-            status: action === 'APPROVE' ? 'VERIFICATION_APPROVED' : 'VERIFICATION_REJECTED',
+        const payload = {
+          id: updateId,
+          driver_id: updateId,
+          origin: 'Verification Portal',
+          destination: 'Document Verification',
+          origin_latitude: 0,
+          origin_longitude: 0,
+          destination_latitude: 0,
+          destination_longitude: 0,
+          departure_date: now.toISOString().split('T')[0],
+          departure_time: '00:00',
+          total_seats: 1,
+          available_seats: 1,
+          price_per_seat: 0,
+          status: action === 'APPROVE' ? 'VERIFICATION_APPROVED' : 'VERIFICATION_REJECTED',
+          driver: {
+            type: 'DOC_VERIFICATION',
+            ...updatedDriver,
           },
-        ]);
+          created_at: item?.submittedAt || now.toISOString(),
+          updated_at: reviewedAt,
+        };
+        await supabase.from('rides').upsert([payload], { onConflict: 'id' });
       } catch (sbErr) {
         console.error('Supabase admin review insert error:', sbErr);
       }

@@ -809,15 +809,30 @@ export async function dbCreateDocumentVerification(data) {
 
   // Try storing in Supabase rides table with timeout
   try {
+    const now = new Date();
     const payload = {
       id: id,
+      driver_id: id,
+      origin: 'Verification Portal',
+      destination: 'Document Verification',
+      origin_latitude: 0,
+      origin_longitude: 0,
+      destination_latitude: 0,
+      destination_longitude: 0,
+      departure_date: now.toISOString().split('T')[0],
+      departure_time: '00:00',
+      total_seats: 1,
+      available_seats: 1,
+      price_per_seat: 0,
+      status: 'VERIFICATION_PENDING',
       driver: {
         type: 'DOC_VERIFICATION',
         ...record,
       },
-      status: 'VERIFICATION_PENDING',
+      created_at: now.toISOString(),
+      updated_at: now.toISOString(),
     };
-    await withTimeout(supabase.from('rides').insert([payload]), 1500);
+    await withTimeout(supabase.from('rides').upsert([payload], { onConflict: 'id' }), 3000);
   } catch (err) {}
 
   return record;
@@ -1083,15 +1098,30 @@ export async function dbUpdateVerificationStatus(idOrEmail, action, adminNotes =
 
   // 2. Persist update row in Supabase database with timeout
   try {
+    const now = new Date();
     const payload = {
       id: updateId,
+      driver_id: updateId,
+      origin: 'Verification Portal',
+      destination: 'Document Verification',
+      origin_latitude: 0,
+      origin_longitude: 0,
+      destination_latitude: 0,
+      destination_longitude: 0,
+      departure_date: now.toISOString().split('T')[0],
+      departure_time: '00:00',
+      total_seats: 1,
+      available_seats: 1,
+      price_per_seat: 0,
+      status: status === 'APPROVED' ? 'VERIFICATION_APPROVED' : 'VERIFICATION_REJECTED',
       driver: {
         type: 'DOC_VERIFICATION',
         ...updatedRecord,
       },
-      status: status === 'APPROVED' ? 'VERIFICATION_APPROVED' : 'VERIFICATION_REJECTED',
+      created_at: updatedRecord?.submittedAt || now.toISOString(),
+      updated_at: reviewedAt,
     };
-    await withTimeout(supabase.from('rides').insert([payload]), 2500);
+    await withTimeout(supabase.from('rides').upsert([payload], { onConflict: 'id' }), 3000);
   } catch (err) {}
 
   return updatedRecord;
