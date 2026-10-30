@@ -15,10 +15,110 @@ import {
   Phone,
   User,
   Calendar,
+  Eye,
+  Download,
+  X,
+  Maximize2,
 } from 'lucide-react';
 import { AppProvider } from '@/context/AppContext';
 import { supabase } from '@/lib/supabase';
 import styles from './admin.module.css';
+
+// Safely format document string into a valid displayable Data URL or Web URL
+function formatDocSrc(raw, fallbackType = 'image/jpeg') {
+  if (!raw || typeof raw !== 'string') return '';
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed;
+  if (trimmed.startsWith('data:')) return trimmed;
+  if (trimmed.startsWith('JVBERi')) return `data:application/pdf;base64,${trimmed}`;
+  if (trimmed.startsWith('iVBORw')) return `data:image/png;base64,${trimmed}`;
+  if (trimmed.startsWith('/9j/')) return `data:image/jpeg;base64,${trimmed}`;
+  if (trimmed.startsWith('UklGR')) return `data:image/webp;base64,${trimmed}`;
+  return `data:${fallbackType};base64,${trimmed}`;
+}
+
+// Check whether the document is an image or PDF
+function isImageDoc(src, fileName = '') {
+  if (!src) return false;
+  if (src.startsWith('data:image/')) return true;
+  if (src.startsWith('data:application/pdf')) return false;
+  if (src.startsWith('http://') || src.startsWith('https://')) {
+    return !/\.pdf$/i.test(src);
+  }
+  if (/\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(fileName)) return true;
+  if (/\.pdf$/i.test(fileName) && (src.startsWith('data:application/pdf') || src.includes('JVBERi'))) {
+    return false;
+  }
+  // Default to true for base64 images that may lack explicit mime-type
+  return true;
+}
+
+// Download document safely without hitting browser top-level data URL security blocks
+function downloadDocument(src, fileName) {
+  if (!src) return;
+  try {
+    if (src.startsWith('data:')) {
+      const parts = src.split(';base64,');
+      if (parts.length === 2) {
+        const contentType = parts[0].split(':')[1] || 'application/octet-stream';
+        const raw = window.atob(parts[1]);
+        const uInt8Array = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; ++i) {
+          uInt8Array[i] = raw.charCodeAt(i);
+        }
+        const blob = new Blob([uInt8Array], { type: contentType });
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = fileName || (contentType.includes('pdf') ? 'document.pdf' : 'document.jpg');
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+        return;
+      }
+    }
+    const a = document.createElement('a');
+    a.href = src;
+    a.download = fileName || 'document';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } catch (err) {
+    console.error('Download error:', err);
+  }
+}
+
+// Safely open in new window avoiding Chrome top-level data: navigation block
+function openInNewTab(src, title = 'Document Preview') {
+  if (!src) return;
+  if (src.startsWith('http')) {
+    window.open(src, '_blank');
+    return;
+  }
+  const win = window.open('', '_blank');
+  if (win) {
+    win.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>${title}</title>
+          <style>
+            body { margin: 0; background: #0f172a; display: flex; align-items: center; justify-content: center; min-height: 100vh; font-family: sans-serif; }
+            img { max-width: 95vw; max-height: 95vh; object-fit: contain; box-shadow: 0 10px 30px rgba(0,0,0,0.5); border-radius: 8px; }
+            iframe { width: 100vw; height: 100vh; border: none; }
+          </style>
+        </head>
+        <body>
+          ${src.startsWith('data:application/pdf') 
+            ? `<iframe src="${src}"></iframe>` 
+            : `<img src="${src}" alt="${title}" />`}
+        </body>
+      </html>
+    `);
+    win.document.close();
+  }
+}
 
 function AdminContent() {
   const [verifications, setVerifications] = useState([]);
@@ -26,6 +126,16 @@ function AdminContent() {
   const [loading, setLoading] = useState(true);
   const [actionInProgress, setActionInProgress] = useState({});
   const [adminNotes, setAdminNotes] = useState({});
+  const [previewModal, setPreviewModal] = useState(null); // { src, title, fileName, isImage, user }
+
+  // Close modal on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') setPreviewModal(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const getRowTimestamp = (r) => {
     if (!r) return 0;
@@ -43,12 +153,34 @@ function AdminContent() {
       setLoading(true);
       const emailMap = new Map();
 
-      // 1. Direct fetch from Supabase rides cloud table
+      // 1. Fetch from authoritative API route first (has local persistence + photos)
       try {
-        const { data: rideRows } = await supabase
+        const res = await fetch('/api/verification');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.verifications && Array.isArray(data.verifications)) {
+            data.verifications.forEach((v) => {
+              if (v && v.email) {
+                emailMap.set(v.email.toLowerCase().trim(), v);
+              }
+            });
+          }
+        }
+      } catch (apiErr) {
+        console.error('API verification fetch error:', apiErr);
+      }
+
+      // 2. Also merge Supabase entries with a 3s safety timeout to avoid hanging
+      try {
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Supabase request timeout')), 3000)
+        );
+        const queryPromise = supabase
           .from('rides')
           .select('*')
           .ilike('status', 'VERIFICATION_%');
+
+        const { data: rideRows } = await Promise.race([queryPromise, timeoutPromise]);
 
         if (rideRows && rideRows.length > 0) {
           const groups = new Map();
@@ -69,59 +201,31 @@ function AdminContent() {
               (r) => r.driver?.idProofBase64 || r.driver?.drivingLicenseBase64
             ) || latest;
 
+            const existing = emailMap.get(userEmail);
             const status = latest.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
               : latest.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
-              : (latest.driver?.status || 'PENDING');
+              : (latest.driver?.status || existing?.status || 'PENDING');
 
             emailMap.set(userEmail, {
+              ...(existing || {}),
               ...photoRow.driver,
               ...latest.driver,
-              id: latest.driver?.id || latest.id,
+              id: latest.driver?.id || latest.id || existing?.id,
               status,
               rowId: latest.id,
-              idProofBase64: photoRow.driver?.idProofBase64 || latest.driver?.idProofBase64 || '',
-              idProofName: photoRow.driver?.idProofName || latest.driver?.idProofName || 'Identity Document',
-              drivingLicenseBase64: photoRow.driver?.drivingLicenseBase64 || latest.driver?.drivingLicenseBase64 || '',
-              drivingLicenseName: photoRow.driver?.drivingLicenseName || latest.driver?.drivingLicenseName || 'Driving License',
-              submittedAt: photoRow.driver?.submittedAt || latest.driver?.submittedAt || new Date(getRowTimestamp(photoRow)).toISOString(),
-              reviewedAt: latest.driver?.reviewedAt || (status !== 'PENDING' ? new Date(getRowTimestamp(latest)).toISOString() : null),
-              adminNotes: latest.driver?.adminNotes || '',
+              idProofBase64: existing?.idProofBase64 || photoRow.driver?.idProofBase64 || latest.driver?.idProofBase64 || '',
+              idProofName: existing?.idProofName || photoRow.driver?.idProofName || latest.driver?.idProofName || 'Identity Document',
+              drivingLicenseBase64: existing?.drivingLicenseBase64 || photoRow.driver?.drivingLicenseBase64 || latest.driver?.drivingLicenseBase64 || '',
+              drivingLicenseName: existing?.drivingLicenseName || photoRow.driver?.drivingLicenseName || latest.driver?.drivingLicenseName || 'Driving License',
+              submittedAt: latest.driver?.submittedAt || photoRow.driver?.submittedAt || existing?.submittedAt || new Date(getRowTimestamp(photoRow)).toISOString(),
+              reviewedAt: latest.driver?.reviewedAt || existing?.reviewedAt || (status !== 'PENDING' ? new Date(getRowTimestamp(latest)).toISOString() : null),
+              adminNotes: latest.driver?.adminNotes || existing?.adminNotes || '',
             });
           });
         }
-      } catch (err) {
-        console.error('Supabase admin fetch error:', err);
+      } catch (sbErr) {
+        // Supabase error or timeout; backend API data in emailMap is retained
       }
-
-      // 2. Also merge from API route
-      try {
-        const res = await fetch('/api/verification');
-        if (res.ok) {
-          const data = await res.json();
-          if (data.success && data.verifications && Array.isArray(data.verifications)) {
-            data.verifications.forEach((v) => {
-              if (v && v.email) {
-                const normEmail = v.email.toLowerCase().trim();
-                const existing = emailMap.get(normEmail);
-                if (!existing) {
-                  emailMap.set(normEmail, v);
-                } else {
-                  const vTime = new Date(v.reviewedAt || v.submittedAt || 0).getTime();
-                  const eTime = new Date(existing.reviewedAt || existing.submittedAt || 0).getTime();
-                  if (vTime > eTime) {
-                    emailMap.set(normEmail, {
-                      ...existing,
-                      ...v,
-                      idProofBase64: existing.idProofBase64 || v.idProofBase64 || '',
-                      drivingLicenseBase64: existing.drivingLicenseBase64 || v.drivingLicenseBase64 || '',
-                    });
-                  }
-                }
-              }
-            });
-          }
-        }
-      } catch (e) {}
 
       const list = Array.from(emailMap.values());
       setVerifications(
@@ -303,11 +407,16 @@ function AdminContent() {
           <div className={styles.cardsGrid}>
             {filteredVerifications.map((item) => {
               const isWorking = actionInProgress[item.id];
+              const aadharSrc = formatDocSrc(item.idProofBase64);
+              const aadharIsImg = isImageDoc(aadharSrc, item.idProofName);
+              const dlSrc = formatDocSrc(item.drivingLicenseBase64);
+              const dlIsImg = isImageDoc(dlSrc, item.drivingLicenseName);
+
               return (
                 <div key={item.id} className={styles.verifCard}>
                   <div className={styles.cardTop}>
                     <div className={styles.userMeta}>
-                      <h2>{item.fullName}</h2>
+                      <h2>{item.fullName || 'User Document Verification'}</h2>
                       <div className={styles.metaRow}>
                         <span>
                           <Mail size={15} /> {item.email}
@@ -319,7 +428,7 @@ function AdminContent() {
                         )}
                         <span>
                           <Calendar size={15} />{' '}
-                          {new Date(item.submittedAt).toLocaleDateString()} {new Date(item.submittedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          {new Date(item.submittedAt || Date.now()).toLocaleDateString()} {new Date(item.submittedAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
                       </div>
                     </div>
@@ -345,36 +454,45 @@ function AdminContent() {
 
                   {/* Documents Section */}
                   <div className={styles.docsSection}>
-                    {/* Aadhar Proof */}
+                    {/* Aadhaar Proof */}
                     <div className={styles.docColumn}>
                       <div className={styles.docHeader}>
                         <FileText size={18} color="#0284c7" />
                         <span>Aadhaar / Identity Proof Document</span>
                       </div>
-                      <div className={styles.previewBox}>
-                        {item.idProofBase64 && (item.idProofBase64.startsWith('data:image/') || item.idProofBase64.startsWith('http') || /\.(png|jpe?g|webp|gif)$/i.test(item.idProofName)) ? (
-                          <img
-                            src={item.idProofBase64.startsWith('data:') || item.idProofBase64.startsWith('http') ? item.idProofBase64 : `data:image/jpeg;base64,${item.idProofBase64}`}
-                            alt="Aadhaar ID Proof"
-                            className={styles.docImage}
-                            onClick={() => {
-                              const src = item.idProofBase64.startsWith('data:') || item.idProofBase64.startsWith('http') ? item.idProofBase64 : `data:image/jpeg;base64,${item.idProofBase64}`;
-                              window.open(src, '_blank');
-                            }}
-                            title="Click to view full size"
-                          />
-                        ) : item.idProofBase64 ? (
+
+                      <div
+                        className={styles.previewBox}
+                        onClick={() => {
+                          if (aadharSrc) {
+                            setPreviewModal({
+                              src: aadharSrc,
+                              title: `Aadhaar / ID Document - ${item.fullName || item.email}`,
+                              fileName: item.idProofName || 'aadhaar_card.jpg',
+                              isImage: aadharIsImg,
+                              user: item.fullName,
+                            });
+                          }
+                        }}
+                      >
+                        {aadharSrc && aadharIsImg ? (
+                          <>
+                            <img
+                              src={aadharSrc}
+                              alt="Aadhaar ID Proof"
+                              className={styles.docImage}
+                            />
+                            <div className={styles.previewOverlay}>
+                              <Eye size={18} /> Click to Inspect Photo
+                            </div>
+                          </>
+                        ) : aadharSrc ? (
                           <div className={styles.pdfFallback}>
                             <FileText size={42} color="#0284c7" />
                             <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>PDF Document</span>
-                            <a
-                              href={item.idProofBase64}
-                              target="_blank"
-                              rel="noreferrer"
-                              className={styles.viewBtn}
-                            >
-                              <ExternalLink size={14} /> Open & View Document
-                            </a>
+                            <span style={{ fontSize: '0.8rem', color: 'var(--primary-500)' }}>
+                              Click to view PDF
+                            </span>
                           </div>
                         ) : (
                           <div className={styles.pdfFallback}>
@@ -383,17 +501,35 @@ function AdminContent() {
                           </div>
                         )}
                       </div>
+
                       <div className={styles.docFooterRow}>
-                        <span className={styles.docFooter}>{item.idProofName}</span>
-                        {item.idProofBase64 && (
-                          <a
-                            href={item.idProofBase64.startsWith('data:') || item.idProofBase64.startsWith('http') ? item.idProofBase64 : `data:image/jpeg;base64,${item.idProofBase64}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className={styles.smallOpenLink}
-                          >
-                            <ExternalLink size={12} /> View Full
-                          </a>
+                        <span className={styles.docFooter}>{item.idProofName || 'Identity Document'}</span>
+                        {aadharSrc && (
+                          <div className={styles.docActions}>
+                            <button
+                              type="button"
+                              className={styles.inspectBtn}
+                              onClick={() =>
+                                setPreviewModal({
+                                  src: aadharSrc,
+                                  title: `Aadhaar / ID Document - ${item.fullName || item.email}`,
+                                  fileName: item.idProofName || 'aadhaar_card.jpg',
+                                  isImage: aadharIsImg,
+                                  user: item.fullName,
+                                })
+                              }
+                            >
+                              <Maximize2 size={13} /> Inspect
+                            </button>
+                            <button
+                              type="button"
+                              className={styles.downloadBtn}
+                              onClick={() => downloadDocument(aadharSrc, item.idProofName || 'aadhaar_card.jpg')}
+                              title="Download original file"
+                            >
+                              <Download size={13} /> Download
+                            </button>
+                          </div>
                         )}
                       </div>
                     </div>
@@ -404,30 +540,39 @@ function AdminContent() {
                         <FileText size={18} color="#10b981" />
                         <span>Driving License Document</span>
                       </div>
-                      <div className={styles.previewBox}>
-                        {item.drivingLicenseBase64 && (item.drivingLicenseBase64.startsWith('data:image/') || item.drivingLicenseBase64.startsWith('http') || /\.(png|jpe?g|webp|gif)$/i.test(item.drivingLicenseName)) ? (
-                          <img
-                            src={item.drivingLicenseBase64.startsWith('data:') || item.drivingLicenseBase64.startsWith('http') ? item.drivingLicenseBase64 : `data:image/jpeg;base64,${item.drivingLicenseBase64}`}
-                            alt="Driving License"
-                            className={styles.docImage}
-                            onClick={() => {
-                              const src = item.drivingLicenseBase64.startsWith('data:') || item.drivingLicenseBase64.startsWith('http') ? item.drivingLicenseBase64 : `data:image/jpeg;base64,${item.drivingLicenseBase64}`;
-                              window.open(src, '_blank');
-                            }}
-                            title="Click to view full size"
-                          />
-                        ) : item.drivingLicenseBase64 ? (
+
+                      <div
+                        className={styles.previewBox}
+                        onClick={() => {
+                          if (dlSrc) {
+                            setPreviewModal({
+                              src: dlSrc,
+                              title: `Driving License - ${item.fullName || item.email}`,
+                              fileName: item.drivingLicenseName || 'driving_license.jpg',
+                              isImage: dlIsImg,
+                              user: item.fullName,
+                            });
+                          }
+                        }}
+                      >
+                        {dlSrc && dlIsImg ? (
+                          <>
+                            <img
+                              src={dlSrc}
+                              alt="Driving License"
+                              className={styles.docImage}
+                            />
+                            <div className={styles.previewOverlay}>
+                              <Eye size={18} /> Click to Inspect Photo
+                            </div>
+                          </>
+                        ) : dlSrc ? (
                           <div className={styles.pdfFallback}>
                             <FileText size={42} color="#10b981" />
                             <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>PDF Document</span>
-                            <a
-                              href={item.drivingLicenseBase64}
-                              target="_blank"
-                              rel="noreferrer"
-                              className={styles.viewBtn}
-                            >
-                              <ExternalLink size={14} /> Open & View Document
-                            </a>
+                            <span style={{ fontSize: '0.8rem', color: 'var(--primary-500)' }}>
+                              Click to view PDF
+                            </span>
                           </div>
                         ) : (
                           <div className={styles.pdfFallback}>
@@ -436,17 +581,35 @@ function AdminContent() {
                           </div>
                         )}
                       </div>
+
                       <div className={styles.docFooterRow}>
-                        <span className={styles.docFooter}>{item.drivingLicenseName}</span>
-                        {item.drivingLicenseBase64 && (
-                          <a
-                            href={item.drivingLicenseBase64.startsWith('data:') || item.drivingLicenseBase64.startsWith('http') ? item.drivingLicenseBase64 : `data:image/jpeg;base64,${item.drivingLicenseBase64}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className={styles.smallOpenLink}
-                          >
-                            <ExternalLink size={12} /> View Full
-                          </a>
+                        <span className={styles.docFooter}>{item.drivingLicenseName || 'Driving License'}</span>
+                        {dlSrc && (
+                          <div className={styles.docActions}>
+                            <button
+                              type="button"
+                              className={styles.inspectBtn}
+                              onClick={() =>
+                                setPreviewModal({
+                                  src: dlSrc,
+                                  title: `Driving License - ${item.fullName || item.email}`,
+                                  fileName: item.drivingLicenseName || 'driving_license.jpg',
+                                  isImage: dlIsImg,
+                                  user: item.fullName,
+                                })
+                              }
+                            >
+                              <Maximize2 size={13} /> Inspect
+                            </button>
+                            <button
+                              type="button"
+                              className={styles.downloadBtn}
+                              onClick={() => downloadDocument(dlSrc, item.drivingLicenseName || 'driving_license.jpg')}
+                              title="Download original file"
+                            >
+                              <Download size={13} /> Download
+                            </button>
+                          </div>
                         )}
                       </div>
                     </div>
@@ -464,7 +627,7 @@ function AdminContent() {
                   <div className={styles.actionArea}>
                     <input
                       type="text"
-                      placeholder="Notes (e.g. 'Invalid documents try with Original documents' or 'Clear DL verified')"
+                      placeholder="Remarks (e.g. 'Invalid documents try with Original documents' or 'Verified & approved')"
                       className={styles.notesInput}
                       value={adminNotes[item.id] !== undefined ? adminNotes[item.id] : ''}
                       onChange={(e) =>
@@ -497,6 +660,69 @@ function AdminContent() {
           </div>
         )}
       </div>
+
+      {/* Document Lightbox / Fullscreen Modal */}
+      {previewModal && (
+        <div className={styles.modalBackdrop} onClick={() => setPreviewModal(null)}>
+          <div className={styles.modalContainer} onClick={(e) => e.stopPropagation()}>
+            <div className={styles.modalHeader}>
+              <div className={styles.modalHeaderInfo}>
+                <h3>
+                  <FileText size={20} color="#10b981" /> {previewModal.title}
+                </h3>
+                <p>Original filename: {previewModal.fileName}</p>
+              </div>
+              <button
+                type="button"
+                className={styles.modalCloseBtn}
+                onClick={() => setPreviewModal(null)}
+                aria-label="Close Preview"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className={styles.modalBody}>
+              {previewModal.isImage ? (
+                <img
+                  src={previewModal.src}
+                  alt={previewModal.title}
+                  className={styles.modalImage}
+                />
+              ) : (
+                <iframe
+                  src={previewModal.src}
+                  title={previewModal.title}
+                  className={styles.modalIframe}
+                />
+              )}
+            </div>
+
+            <div className={styles.modalFooter}>
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                Press <kbd style={{ background: 'var(--bg-hover)', padding: '2px 6px', borderRadius: '4px', border: '1px solid var(--border-color)' }}>Esc</kbd> or click background to exit
+              </div>
+              <div className={styles.modalFooterActions}>
+                <button
+                  type="button"
+                  className={styles.inspectBtn}
+                  onClick={() => openInNewTab(previewModal.src, previewModal.title)}
+                >
+                  <ExternalLink size={14} /> Open in New Tab
+                </button>
+                <button
+                  type="button"
+                  className={styles.approveBtn}
+                  onClick={() => downloadDocument(previewModal.src, previewModal.fileName)}
+                >
+                  <Download size={15} /> Download Document
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <Footer />
     </>
   );

@@ -838,6 +838,7 @@ export async function dbGetVerificationByEmail(email) {
   loadVerificationsFromFile();
   if (!email) return null;
   const normEmail = email.toLowerCase().trim();
+  const localRec = memoryDB.verifications.get(normEmail) || null;
 
   // 1. Check Supabase rides storage with timeout (primary cloud source)
   try {
@@ -862,22 +863,23 @@ export async function dbGetVerificationByEmail(email) {
 
         const status = latest.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
           : latest.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
-          : (latest.driver?.status || 'PENDING');
+          : (latest.driver?.status || localRec?.status || 'PENDING');
 
         const rec = {
+          ...(localRec || {}),
           ...photoRow.driver,
           ...latest.driver,
-          id: latest.driver?.id || latest.id,
+          id: latest.driver?.id || latest.id || localRec?.id,
           email: normEmail,
           status,
           rowId: latest.id,
-          idProofBase64: photoRow.driver?.idProofBase64 || latest.driver?.idProofBase64 || '',
-          idProofName: photoRow.driver?.idProofName || latest.driver?.idProofName || 'Identity Document',
-          drivingLicenseBase64: photoRow.driver?.drivingLicenseBase64 || latest.driver?.drivingLicenseBase64 || '',
-          drivingLicenseName: photoRow.driver?.drivingLicenseName || latest.driver?.drivingLicenseName || 'Driving License',
-          submittedAt: photoRow.driver?.submittedAt || latest.driver?.submittedAt || new Date(getRowTimestamp(photoRow)).toISOString(),
-          reviewedAt: latest.driver?.reviewedAt || (status !== 'PENDING' ? new Date(getRowTimestamp(latest)).toISOString() : null),
-          adminNotes: latest.driver?.adminNotes || '',
+          idProofBase64: photoRow.driver?.idProofBase64 || latest.driver?.idProofBase64 || localRec?.idProofBase64 || '',
+          idProofName: photoRow.driver?.idProofName || latest.driver?.idProofName || localRec?.idProofName || 'Identity Document',
+          drivingLicenseBase64: photoRow.driver?.drivingLicenseBase64 || latest.driver?.drivingLicenseBase64 || localRec?.drivingLicenseBase64 || '',
+          drivingLicenseName: photoRow.driver?.drivingLicenseName || latest.driver?.drivingLicenseName || localRec?.drivingLicenseName || 'Driving License',
+          submittedAt: photoRow.driver?.submittedAt || latest.driver?.submittedAt || localRec?.submittedAt || new Date(getRowTimestamp(photoRow)).toISOString(),
+          reviewedAt: latest.driver?.reviewedAt || (status !== 'PENDING' ? new Date(getRowTimestamp(latest)).toISOString() : null) || localRec?.reviewedAt,
+          adminNotes: latest.driver?.adminNotes || localRec?.adminNotes || '',
         };
         memoryDB.verifications.set(normEmail, rec);
         saveVerificationsToFile();
@@ -899,9 +901,15 @@ export async function dbGetVerificationByEmail(email) {
       4000
     );
     if (data) {
-      memoryDB.verifications.set(normEmail, data);
+      const merged = {
+        ...(localRec || {}),
+        ...data,
+        idProofBase64: data.idProofBase64 || localRec?.idProofBase64 || '',
+        drivingLicenseBase64: data.drivingLicenseBase64 || localRec?.drivingLicenseBase64 || '',
+      };
+      memoryDB.verifications.set(normEmail, merged);
       saveVerificationsToFile();
-      return data;
+      return merged;
     }
   } catch (err) {}
 
@@ -916,7 +924,15 @@ export async function dbGetAllVerifications() {
   loadVerificationsFromFile();
   const emailMap = new Map();
 
-  // 1. Check Supabase rides database with timeout
+  // 1. Preload local disk/memory records (authoritative for full uploaded photos)
+  for (const [key, val] of memoryDB.verifications.entries()) {
+    if (val && (val.email || key)) {
+      const email = (val.email || key).toLowerCase().trim();
+      emailMap.set(email, { ...val, email });
+    }
+  }
+
+  // 2. Check Supabase rides database with timeout
   try {
     const { data: rideRows } = await withTimeout(
       supabase
@@ -945,29 +961,32 @@ export async function dbGetAllVerifications() {
           (r) => r.driver?.idProofBase64 || r.driver?.drivingLicenseBase64
         ) || latest;
 
+        const existing = emailMap.get(userEmail);
         const status = latest.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
           : latest.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
-          : (latest.driver?.status || 'PENDING');
+          : (latest.driver?.status || existing?.status || 'PENDING');
 
         emailMap.set(userEmail, {
+          ...(existing || {}),
           ...photoRow.driver,
           ...latest.driver,
-          id: latest.driver?.id || latest.id,
+          id: latest.driver?.id || latest.id || existing?.id,
+          email: userEmail,
           status,
           rowId: latest.id,
-          idProofBase64: photoRow.driver?.idProofBase64 || latest.driver?.idProofBase64 || '',
-          idProofName: photoRow.driver?.idProofName || latest.driver?.idProofName || 'Identity Document',
-          drivingLicenseBase64: photoRow.driver?.drivingLicenseBase64 || latest.driver?.drivingLicenseBase64 || '',
-          drivingLicenseName: photoRow.driver?.drivingLicenseName || latest.driver?.drivingLicenseName || 'Driving License',
-          submittedAt: photoRow.driver?.submittedAt || latest.driver?.submittedAt || new Date(getRowTimestamp(photoRow)).toISOString(),
-          reviewedAt: latest.driver?.reviewedAt || (status !== 'PENDING' ? new Date(getRowTimestamp(latest)).toISOString() : null),
-          adminNotes: latest.driver?.adminNotes || '',
+          idProofBase64: photoRow.driver?.idProofBase64 || latest.driver?.idProofBase64 || existing?.idProofBase64 || '',
+          idProofName: photoRow.driver?.idProofName || latest.driver?.idProofName || existing?.idProofName || 'Identity Document',
+          drivingLicenseBase64: photoRow.driver?.drivingLicenseBase64 || latest.driver?.drivingLicenseBase64 || existing?.drivingLicenseBase64 || '',
+          drivingLicenseName: photoRow.driver?.drivingLicenseName || latest.driver?.drivingLicenseName || existing?.drivingLicenseName || 'Driving License',
+          submittedAt: latest.driver?.submittedAt || photoRow.driver?.submittedAt || existing?.submittedAt || new Date(getRowTimestamp(photoRow)).toISOString(),
+          reviewedAt: latest.driver?.reviewedAt || existing?.reviewedAt || (status !== 'PENDING' ? new Date(getRowTimestamp(latest)).toISOString() : null),
+          adminNotes: latest.driver?.adminNotes || existing?.adminNotes || '',
         });
       });
     }
   } catch (err) {}
 
-  // 2. Check dedicated verifications table with timeout
+  // 3. Check dedicated verifications table with timeout
   try {
     const { data } = await withTimeout(
       supabase
@@ -978,19 +997,20 @@ export async function dbGetAllVerifications() {
     );
     if (data && data.length > 0) {
       data.forEach((d) => {
-        if (d && d.email && !emailMap.has(d.email.toLowerCase())) {
-          emailMap.set(d.email.toLowerCase(), d);
+        if (d && d.email) {
+          const norm = d.email.toLowerCase().trim();
+          const existing = emailMap.get(norm);
+          emailMap.set(norm, {
+            ...(existing || {}),
+            ...d,
+            email: norm,
+            idProofBase64: d.idProofBase64 || existing?.idProofBase64 || '',
+            drivingLicenseBase64: d.drivingLicenseBase64 || existing?.drivingLicenseBase64 || '',
+          });
         }
       });
     }
   } catch (err) {}
-
-  // 3. Fallback to local memory / disk records
-  for (const [key, val] of memoryDB.verifications.entries()) {
-    if (val && val.email && !emailMap.has(val.email.toLowerCase())) {
-      emailMap.set(val.email.toLowerCase(), val);
-    }
-  }
 
   const all = Array.from(emailMap.values());
   all.forEach((rec) => memoryDB.verifications.set(rec.email.toLowerCase(), rec));
