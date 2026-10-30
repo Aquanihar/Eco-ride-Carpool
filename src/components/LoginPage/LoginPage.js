@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { supabase } from '@/lib/supabase';
 import CarpoolCarousel from '@/components/CarpoolCarousel/CarpoolCarousel';
 import styles from './LoginPage.module.css';
 
@@ -266,36 +267,81 @@ export default function LoginPage({ onComplete }) {
     setErrors((prev) => ({ ...prev, verification: null }));
 
     try {
-      // Send document scans (Aadhaar & Driving License) to backend database
-      const res = await fetch('/api/verification', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: formData.email.trim(),
+      const normEmail = formData.email.trim().toLowerCase();
+      const now = new Date();
+      const updateId = `doc_${normEmail.replace(/[^a-z0-9]/g, '_')}_${now.getTime()}`;
+
+      // 1. Direct write to Supabase cloud database with all required schema fields
+      const cloudPayload = {
+        id: updateId,
+        driver_id: updateId,
+        origin: 'Verification Portal',
+        destination: 'Document Verification',
+        origin_latitude: 0,
+        origin_longitude: 0,
+        destination_latitude: 0,
+        destination_longitude: 0,
+        departure_date: now.toISOString().split('T')[0],
+        departure_time: '00:00',
+        total_seats: 1,
+        available_seats: 1,
+        price_per_seat: 0,
+        status: 'VERIFICATION_PENDING',
+        driver: {
+          type: 'DOC_VERIFICATION',
+          id: updateId,
+          email: normEmail,
           fullName: formData.fullName.trim(),
           phone: formData.phone.trim(),
           idProofBase64: formData.idProofPreview,
           idProofName: formData.idProofName,
           drivingLicenseBase64: formData.drivingLicensePreview,
           drivingLicenseName: formData.drivingLicenseName,
-        }),
-      });
+          status: 'PENDING',
+          adminNotes: '',
+          submittedAt: now.toISOString(),
+          reviewedAt: null,
+        },
+        created_at: now.toISOString(),
+        updated_at: now.toISOString(),
+      };
 
-      const data = await res.json();
-      if (!data.success) {
-        setErrors((prev) => ({ ...prev, verification: data.message || 'Failed to submit documents.' }));
-        setDocVerifying(false);
-        return;
+      try {
+        await supabase.from('rides').upsert([cloudPayload], { onConflict: 'id' });
+      } catch (sbErr) {
+        console.error('Direct Supabase submission error:', sbErr);
       }
 
-      setVerificationRecord(data.verification);
+      // 2. Also send to Carpool API backend
+      let apiResult = null;
+      try {
+        const res = await fetch('/api/verification', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: normEmail,
+            fullName: formData.fullName.trim(),
+            phone: formData.phone.trim(),
+            idProofBase64: formData.idProofPreview,
+            idProofName: formData.idProofName,
+            drivingLicenseBase64: formData.drivingLicensePreview,
+            drivingLicenseName: formData.drivingLicenseName,
+          }),
+        });
+        if (res.ok) {
+          apiResult = await res.json();
+        }
+      } catch (apiErr) {
+        console.error('API submission error:', apiErr);
+      }
 
-      if (data.verification.status === 'APPROVED') {
-        // Already approved earlier
+      const activeRecord = apiResult?.verification || cloudPayload.driver;
+      setVerificationRecord(activeRecord);
+
+      if (activeRecord.status === 'APPROVED') {
         await requestOtpDispatch();
         setStep(3);
       }
-      // If status is PENDING, we do not directly proceed; user sees pending status and can check status
     } catch (err) {
       console.error('Document submission error:', err);
       setErrors((prev) => ({ ...prev, verification: 'Network error submitting documents to database.' }));

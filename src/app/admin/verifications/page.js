@@ -148,9 +148,9 @@ function AdminContent() {
     return Math.max(tRev, tSub, tId, tCreated, tUpdated);
   };
 
-  const fetchVerifications = useCallback(async () => {
+  const fetchVerifications = useCallback(async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const emailMap = new Map();
 
       // 1. Fetch from authoritative API route first (has local persistence + photos)
@@ -238,14 +238,29 @@ function AdminContent() {
     } catch (err) {
       console.error('Failed to fetch verifications:', err);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     fetchVerifications();
-    const interval = setInterval(fetchVerifications, 5000);
-    return () => clearInterval(interval);
+    const interval = setInterval(() => fetchVerifications(true), 4000);
+
+    const channel = supabase
+      .channel('realtime_admin_verifications')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'rides' },
+        () => {
+          fetchVerifications(true);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      clearInterval(interval);
+      supabase.removeChannel(channel);
+    };
   }, [fetchVerifications]);
 
   const handleReview = async (id, action) => {
