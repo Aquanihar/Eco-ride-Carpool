@@ -30,4 +30,5 @@ next-env.d.ts
 backend-java/bin/
 
 # local data
-data/
+data/*
+!data/verifications.json
