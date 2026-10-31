@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { supabase } from './supabase.js';
+import { supabase, supabaseAdmin } from './supabase.js';
 
 // In-memory store for fallback mode when Supabase DB tables aren't migrated
 const globalStore = globalThis.__raahi_memory_db || {
@@ -83,49 +83,14 @@ export function saveNotificationsToFile() {
 }
 
 function loadVerificationsFromFile() {
-  try {
-    if (fs.existsSync(VERIFICATIONS_FILE)) {
-      const content = fs.readFileSync(VERIFICATIONS_FILE, 'utf8');
-      const list = JSON.parse(content);
-      if (Array.isArray(list)) {
-        list.forEach((rec) => {
-          if (rec) {
-            const key = rec.id || rec.email?.toLowerCase();
-            if (key) {
-              memoryDB.verifications.set(key, rec);
-            }
-          }
-        });
-      }
-    }
-  } catch (e) {
-    console.error('Error loading verifications from file:', e.message);
-  }
+  // No-op: Supabase is the sole source of truth for verifications.
 }
 
 export function saveVerificationsToFile() {
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    const list = Array.from(memoryDB.verifications.values());
-    fs.writeFileSync(VERIFICATIONS_FILE, JSON.stringify(list, null, 2), 'utf8');
-
-    // Only mirror to raahi-admin-portal if that directory actually exists
-    const portalDataDir = path.resolve(process.cwd(), '..', 'raahi-admin-portal', 'data');
-    if (fs.existsSync(portalDataDir)) {
-      try {
-        const portalFile = path.join(portalDataDir, 'verifications.json');
-        fs.writeFileSync(portalFile, JSON.stringify(list, null, 2), 'utf8');
-      } catch (err) {}
-    }
-  } catch (e) {
-    console.error('Error saving verifications to file:', e.message);
-  }
+  // No-op: Supabase is the sole source of truth for verifications.
 }
 
-// Initial load of verifications and persistent data
-loadVerificationsFromFile();
+// Initial load of persistent data
 loadAllDataFromFiles();
 
 async function withTimeout(promise, ms = 6000) {
@@ -991,81 +956,8 @@ export function resetMemoryDB() {
 
 /* =========================================================
    Document Verification Operations (Aadhaar & Driving License)
+   Supabase is the sole source of truth.
    ========================================================= */
-
-export async function dbCreateDocumentVerification(data) {
-  loadVerificationsFromFile();
-  const normEmail = (data.email || '').trim().toLowerCase();
-  const timestamp = Date.now();
-  const id = data.id || `doc_${normEmail.replace(/[^a-z0-9]/g, '_')}_${timestamp}`;
-
-  const record = {
-    id,
-    type: 'DOC_VERIFICATION',
-    email: normEmail,
-    fullName: data.fullName || '',
-    phone: data.phone || '',
-    idProofName: data.idProofName || 'aadhaar_card.pdf',
-    idProofBase64: data.idProofBase64 || null,
-    drivingLicenseName: data.drivingLicenseName || 'driving_license.pdf',
-    drivingLicenseBase64: data.drivingLicenseBase64 || null,
-    status: 'PENDING', // PENDING, APPROVED, REJECTED
-    adminNotes: '',
-    submittedAt: data.submittedAt || new Date().toISOString(),
-    reviewedAt: null,
-  };
-
-  // Persist locally in memory and disk file immediately by its unique submission id
-  memoryDB.verifications.set(id, record);
-  saveVerificationsToFile();
-
-  // Try storing in dedicated Supabase 'verifications' table with timeout
-  try {
-    const { data: inserted, error } = await withTimeout(
-      supabase
-        .from('verifications')
-        .upsert([record], { onConflict: 'id' })
-        .select()
-        .single(),
-      1500
-    );
-    if (inserted && !error) {
-      memoryDB.verifications.set(id, inserted);
-      saveVerificationsToFile();
-      return inserted;
-    }
-  } catch (err) {}
-
-  // Try storing in Supabase rides table with timeout
-  try {
-    const now = new Date();
-    const payload = {
-      id: id,
-      driver_id: id,
-      origin: 'Verification Portal',
-      destination: 'Document Verification',
-      origin_latitude: 0,
-      origin_longitude: 0,
-      destination_latitude: 0,
-      destination_longitude: 0,
-      departure_date: now.toISOString().split('T')[0],
-      departure_time: '00:00',
-      total_seats: 1,
-      available_seats: 1,
-      price_per_seat: 0,
-      status: 'VERIFICATION_PENDING',
-      driver: {
-        type: 'DOC_VERIFICATION',
-        ...record,
-      },
-      created_at: record.submittedAt,
-      updated_at: record.submittedAt,
-    };
-    await withTimeout(supabase.from('rides').upsert([payload], { onConflict: 'id' }), 3000);
-  } catch (err) {}
-
-  return record;
-}
 
 export function getDocumentSubmissionTimestamp(r) {
   if (!r) return 0;
@@ -1094,29 +986,102 @@ function cleanUserEmail(rawEmail, rawId) {
   return m ? m[1].toLowerCase().trim() : null;
 }
 
+export async function dbCreateDocumentVerification(data) {
+  const normEmail = (data.email || '').trim().toLowerCase();
+  const timestamp = Date.now();
+  const id = data.id || `doc_${normEmail.replace(/[^a-z0-9]/g, '_')}_${timestamp}`;
+
+  const record = {
+    id,
+    type: 'DOC_VERIFICATION',
+    email: normEmail,
+    fullName: data.fullName || '',
+    phone: data.phone || '',
+    idProofName: data.idProofName || 'aadhaar_card.pdf',
+    idProofBase64: data.idProofBase64 || null,
+    drivingLicenseName: data.drivingLicenseName || 'driving_license.pdf',
+    drivingLicenseBase64: data.drivingLicenseBase64 || null,
+    status: 'PENDING',
+    adminNotes: '',
+    submittedAt: data.submittedAt || new Date().toISOString(),
+    reviewedAt: null,
+  };
+
+  // Cache in runtime memory
+  memoryDB.verifications.set(id, record);
+  if (normEmail) memoryDB.verifications.set(normEmail, record);
+
+  // Try storing in dedicated Supabase 'verifications' table with server-side admin client
+  try {
+    const { data: inserted, error } = await withTimeout(
+      supabaseAdmin
+        .from('verifications')
+        .upsert([record], { onConflict: 'id' })
+        .select()
+        .single(),
+      5000
+    );
+    if (inserted && !error) {
+      memoryDB.verifications.set(id, inserted);
+      if (normEmail) memoryDB.verifications.set(normEmail, inserted);
+    }
+  } catch (err) {}
+
+  // Store in Supabase rides table
+  try {
+    const now = new Date();
+    const payload = {
+      id: id,
+      driver_id: id,
+      origin: 'Verification Portal',
+      destination: 'Document Verification',
+      origin_latitude: 0,
+      origin_longitude: 0,
+      destination_latitude: 0,
+      destination_longitude: 0,
+      departure_date: now.toISOString().split('T')[0],
+      departure_time: '00:00',
+      total_seats: 1,
+      available_seats: 1,
+      price_per_seat: 0,
+      status: 'VERIFICATION_PENDING',
+      driver: {
+        type: 'DOC_VERIFICATION',
+        ...record,
+      },
+      created_at: record.submittedAt,
+      updated_at: record.submittedAt,
+    };
+    await withTimeout(supabaseAdmin.from('rides').upsert([payload], { onConflict: 'id' }), 5000);
+  } catch (err) {
+    console.error('dbCreateDocumentVerification Supabase insert error:', err);
+  }
+
+  return record;
+}
+
 export async function dbGetVerificationByEmail(email) {
-  loadVerificationsFromFile();
   if (!email) return null;
   const normEmail = cleanUserEmail(email, email) || email.toLowerCase().trim();
 
-  // Find all matching local records
   const candidates = [];
+  // 1. Check in-memory runtime cache
   for (const [, val] of memoryDB.verifications.entries()) {
     if (val && cleanUserEmail(val.email, val.id) === normEmail) {
       candidates.push(val);
     }
   }
 
-  // 1. Check Supabase rides storage with fast optimized query
+  // 2. Check Supabase rides table with server admin client
   try {
     const { data: rows } = await withTimeout(
-      supabase
+      supabaseAdmin
         .from('rides')
         .select('id, driver_id, status, created_at, updated_at, driver')
         .ilike('status', 'VERIFICATION_%')
         .order('created_at', { ascending: false })
-        .limit(60),
-      8000
+        .limit(100),
+      10000
     );
 
     if (rows && rows.length > 0) {
@@ -1140,7 +1105,9 @@ export async function dbGetVerificationByEmail(email) {
         }
       });
     }
-  } catch (err) {}
+  } catch (err) {
+    console.warn('dbGetVerificationByEmail Supabase warning:', err.message);
+  }
 
   if (candidates.length === 0) return null;
 
@@ -1180,6 +1147,7 @@ export async function dbGetVerificationByEmail(email) {
     ...docRecord,
     ...latest,
     id: docRecord.id || latest.id || ('doc_' + normEmail.replace(/[^a-z0-9]/g, '_')),
+    rowId: latest.rowId || latest.id || docRecord.id,
     email: normEmail,
     fullName: docRecord.fullName || latest.fullName || 'User',
     phone: docRecord.phone || latest.phone || '',
@@ -1188,6 +1156,8 @@ export async function dbGetVerificationByEmail(email) {
     idProofName: docRecord.idProofName || 'Identity Document',
     drivingLicenseBase64: docRecord.drivingLicenseBase64 || '',
     drivingLicenseName: docRecord.drivingLicenseName || 'Driving License',
+    hasIdProof: Boolean((docRecord.idProofBase64 && docRecord.idProofBase64.length > 50) || docRecord.idProofName),
+    hasDrivingLicense: Boolean((docRecord.drivingLicenseBase64 && docRecord.drivingLicenseBase64.length > 50) || docRecord.drivingLicenseName),
     submittedAt: docRecord.submittedAt || latest.submittedAt || new Date().toISOString(),
     reviewedAt: finalReviewedAt,
     adminNotes: finalNotes,
@@ -1199,31 +1169,23 @@ export async function dbGetVerificationByEmail(email) {
 }
 
 export async function dbGetAllVerifications() {
-  loadVerificationsFromFile();
   const userMap = new Map();
 
-  // 1. Preload local disk/memory records
-  for (const [, val] of memoryDB.verifications.entries()) {
-    if (val) {
-      const email = cleanUserEmail(val.email, val.id);
-      if (email) {
-        if (!userMap.has(email)) userMap.set(email, []);
-        userMap.get(email).push({ ...val, email });
-      }
-    }
-  }
-
-  // 2. Check Supabase rides database with fast optimized query
+  // Query Supabase rides database using server-side admin client
   try {
-    const { data: rideRows } = await withTimeout(
-      supabase
+    const { data: rideRows, error } = await withTimeout(
+      supabaseAdmin
         .from('rides')
         .select('id, driver_id, status, created_at, updated_at, driver')
         .ilike('status', 'VERIFICATION_%')
         .order('created_at', { ascending: false })
-        .limit(60),
-      8000
+        .limit(100),
+      10000
     );
+
+    if (error) {
+      console.warn('Supabase query error in dbGetAllVerifications:', error.message);
+    }
 
     if (rideRows && rideRows.length > 0) {
       rideRows.forEach((r) => {
@@ -1236,9 +1198,9 @@ export async function dbGetAllVerifications() {
             const rowRec = {
               ...r.driver,
               id: r.driver.id || r.id,
+              rowId: r.id,
               email,
               status,
-              rowId: r.id,
               created_at: r.created_at,
               updated_at: r.updated_at,
               submittedAt: r.driver?.submittedAt || r.created_at,
@@ -1251,7 +1213,22 @@ export async function dbGetAllVerifications() {
         }
       });
     }
-  } catch (err) {}
+  } catch (err) {
+    console.warn('Supabase connection warning in dbGetAllVerifications:', err.message);
+  }
+
+  // Fallback to in-memory runtime cache if Supabase query failed or returned no rows
+  if (userMap.size === 0) {
+    for (const [, val] of memoryDB.verifications.entries()) {
+      if (val) {
+        const email = cleanUserEmail(val.email, val.id);
+        if (email) {
+          if (!userMap.has(email)) userMap.set(email, []);
+          userMap.get(email).push({ ...val, email });
+        }
+      }
+    }
+  }
 
   // Consolidate exactly ONE authoritative entry per user email
   const consolidatedList = [];
@@ -1293,10 +1270,14 @@ export async function dbGetAllVerifications() {
     const drivingLicenseBase64 = docRecord.drivingLicenseBase64 || latest.drivingLicenseBase64 || '';
     const drivingLicenseName = docRecord.drivingLicenseName || latest.drivingLicenseName || 'Driving License';
 
-    consolidatedList.push({
+    const hasIdProof = Boolean((idProofBase64 && idProofBase64.length > 50) || idProofName);
+    const hasDrivingLicense = Boolean((drivingLicenseBase64 && drivingLicenseBase64.length > 50) || drivingLicenseName);
+
+    const fullRecord = {
       ...docRecord,
       ...latest,
       id: docRecord.id || latest.id || ('doc_' + email.replace(/[^a-z0-9]/g, '_')),
+      rowId: latest.rowId || latest.id || docRecord.id,
       email,
       fullName: docRecord.fullName || latest.fullName || 'User',
       phone: docRecord.phone || latest.phone || '',
@@ -1305,16 +1286,21 @@ export async function dbGetAllVerifications() {
       idProofName,
       drivingLicenseBase64,
       drivingLicenseName,
+      hasIdProof,
+      hasDrivingLicense,
       submittedAt: docRecord.submittedAt || latest.submittedAt || new Date().toISOString(),
       reviewedAt: finalReviewedAt,
       adminNotes: finalNotes,
-    });
-  });
+    };
 
-  // Keep memory cache updated with newest consolidated data
-  consolidatedList.forEach((rec) => {
-    memoryDB.verifications.set(rec.id, rec);
-    memoryDB.verifications.set(rec.email, rec);
+    // Keep full record in memory cache for on-demand inspection requests
+    memoryDB.verifications.set(fullRecord.id, fullRecord);
+    memoryDB.verifications.set(email, fullRecord);
+
+    // CRITICAL OPTIMIZATION: Do not send heavy base64 images in list query.
+    // Send metadata only, preventing statement timeout and huge payload transfer.
+    const { idProofBase64: _img1, drivingLicenseBase64: _img2, ...listRecord } = fullRecord;
+    consolidatedList.push(listRecord);
   });
 
   return consolidatedList.sort(
@@ -1322,66 +1308,153 @@ export async function dbGetAllVerifications() {
   );
 }
 
+export async function dbGetVerificationById(idOrEmail) {
+  if (!idOrEmail) return null;
+  const normEmail = cleanUserEmail(idOrEmail, idOrEmail) || (typeof idOrEmail === 'string' ? idOrEmail.toLowerCase().trim() : '');
+
+  // 1. Check in-memory runtime cache
+  const cached = memoryDB.verifications.get(idOrEmail) || (normEmail ? memoryDB.verifications.get(normEmail) : null);
+  if (cached && (cached.idProofBase64 || cached.drivingLicenseBase64)) {
+    return cached;
+  }
+
+  // 2. Query Supabase for full record
+  try {
+    const { data: rows } = await withTimeout(
+      supabaseAdmin
+        .from('rides')
+        .select('id, driver_id, status, created_at, updated_at, driver')
+        .ilike('status', 'VERIFICATION_%')
+        .order('created_at', { ascending: false })
+        .limit(100),
+      10000
+    );
+
+    if (rows && rows.length > 0) {
+      const matching = rows.filter((r) => {
+        if (r.id === idOrEmail || r.driver_id === idOrEmail) return true;
+        if (r.driver) {
+          const em = cleanUserEmail(r.driver.email, r.id);
+          if (normEmail && em === normEmail) return true;
+          if (r.driver.id === idOrEmail) return true;
+        }
+        return false;
+      });
+
+      if (matching.length > 0) {
+        matching.sort((a, b) => getDocumentSubmissionTimestamp(b) - getDocumentSubmissionTimestamp(a));
+        const rowWithImages = matching.find(
+          (r) => (r.driver?.idProofBase64 && r.driver.idProofBase64.length > 50) ||
+                 (r.driver?.drivingLicenseBase64 && r.driver.drivingLicenseBase64.length > 50)
+        ) || matching[0];
+
+        const latest = matching[0];
+        const driver = rowWithImages.driver || {};
+        const latestDriver = latest.driver || {};
+        const status = latest.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
+          : latest.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
+          : (latestDriver.status || 'PENDING');
+
+        const rec = {
+          ...driver,
+          ...latestDriver,
+          id: idOrEmail,
+          rowId: latest.id,
+          email: normEmail || driver.email,
+          status,
+          idProofBase64: driver.idProofBase64 || '',
+          idProofName: driver.idProofName || 'Identity Document',
+          drivingLicenseBase64: driver.drivingLicenseBase64 || '',
+          drivingLicenseName: driver.drivingLicenseName || 'Driving License',
+          hasIdProof: Boolean((driver.idProofBase64 && driver.idProofBase64.length > 50) || driver.idProofName),
+          hasDrivingLicense: Boolean((driver.drivingLicenseBase64 && driver.drivingLicenseBase64.length > 50) || driver.drivingLicenseName),
+          submittedAt: driver.submittedAt || latest.created_at,
+          reviewedAt: latestDriver.reviewedAt || (status !== 'PENDING' ? latest.updated_at : null),
+          adminNotes: latestDriver.adminNotes || '',
+        };
+        memoryDB.verifications.set(rec.id, rec);
+        if (rec.email) memoryDB.verifications.set(rec.email, rec);
+        return rec;
+      }
+    }
+  } catch (err) {
+    console.error('dbGetVerificationById Supabase error:', err);
+  }
+
+  return cached || null;
+}
+
 export async function dbUpdateVerificationStatus(idOrEmail, action, adminNotes = '') {
-  loadVerificationsFromFile();
   const status = action === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+  const newRideStatus = status === 'APPROVED' ? 'VERIFICATION_APPROVED' : 'VERIFICATION_REJECTED';
   const now = new Date();
   const reviewedAt = now.toISOString();
 
   const normEmail = cleanUserEmail(idOrEmail, idOrEmail) || (typeof idOrEmail === 'string' ? idOrEmail.toLowerCase().trim() : '');
+  const defaultNotes = status === 'REJECTED'
+    ? 'Invalid documents. Try with original documents.'
+    : 'Verified successfully.';
+  const finalNotes = adminNotes || defaultNotes;
 
-  // Retrieve the user's latest authoritative verification record with newest documents
-  let record = await dbGetVerificationByEmail(normEmail);
+  // 1. Find all matching verification rows in Supabase rides
+  let matchedRows = [];
+  try {
+    const { data: rows } = await withTimeout(
+      supabaseAdmin
+        .from('rides')
+        .select('id, driver_id, status, created_at, updated_at, driver')
+        .ilike('status', 'VERIFICATION_%')
+        .order('created_at', { ascending: false })
+        .limit(100),
+      10000
+    );
 
-  if (!record && idOrEmail) {
-    record = memoryDB.verifications.get(idOrEmail) || null;
+    if (rows && rows.length > 0) {
+      matchedRows = rows.filter((r) => {
+        if (r.id === idOrEmail || r.driver_id === idOrEmail) return true;
+        if (r.driver) {
+          const em = cleanUserEmail(r.driver.email, r.id);
+          if (normEmail && em === normEmail) return true;
+          if (r.driver.id === idOrEmail) return true;
+        }
+        return false;
+      });
+    }
+  } catch (err) {
+    console.error('dbUpdateVerificationStatus find rows error:', err);
   }
 
-  const defaultNotes = status === 'REJECTED'
-    ? 'Invalid documents try with Original documents'
-    : 'Verified successfully.';
-
-  const finalNotes = adminNotes || defaultNotes;
-  const userEmail = record?.email || normEmail;
-  const updateId = record?.id || ('doc_' + userEmail.replace(/[^a-z0-9]/g, '_'));
-
-  const updatedRecord = {
-    ...(record || {}),
-    id: updateId,
-    email: userEmail,
-    status,
-    adminNotes: finalNotes,
-    reviewedAt,
-    idProofBase64: record?.idProofBase64 || '',
-    idProofName: record?.idProofName || '',
-    drivingLicenseBase64: record?.drivingLicenseBase64 || '',
-    drivingLicenseName: record?.drivingLicenseName || '',
-  };
-
-  memoryDB.verifications.set(updateId, updatedRecord);
-  memoryDB.verifications.set(userEmail, updatedRecord);
-  saveVerificationsToFile();
-
-  // 1. Update in dedicated verifications table with timeout
-  try {
-    await withTimeout(
-      supabase
-        .from('verifications')
-        .update({
+  // 2. In-place update of all matching rows in Supabase rides table (avoids duplicate PENDING rows)
+  if (matchedRows.length > 0) {
+    for (const row of matchedRows) {
+      try {
+        const updatedDriver = {
+          ...(row.driver || {}),
           status,
           adminNotes: finalNotes,
           reviewedAt,
-        })
-        .or(`id.eq.${updateId},email.eq.${userEmail}`),
-      1500
-    );
-  } catch (err) {}
-
-  // 2. Persist update row in Supabase database with timeout
-  try {
+        };
+        await withTimeout(
+          supabaseAdmin
+            .from('rides')
+            .update({
+              status: newRideStatus,
+              updated_at: reviewedAt,
+              driver: updatedDriver,
+            })
+            .eq('id', row.id),
+          5000
+        );
+      } catch (updateErr) {
+        console.error(`Failed to update row ${row.id}:`, updateErr);
+      }
+    }
+  } else {
+    // If no row exists yet, upsert a single authoritative row
+    const rowId = idOrEmail || (`doc_${normEmail.replace(/[^a-z0-9]/g, '_')}`);
     const payload = {
-      id: updateId,
-      driver_id: updateId,
+      id: rowId,
+      driver_id: rowId,
       origin: 'Verification Portal',
       destination: 'Document Verification',
       origin_latitude: 0,
@@ -1393,16 +1466,49 @@ export async function dbUpdateVerificationStatus(idOrEmail, action, adminNotes =
       total_seats: 1,
       available_seats: 1,
       price_per_seat: 0,
-      status: status === 'APPROVED' ? 'VERIFICATION_APPROVED' : 'VERIFICATION_REJECTED',
+      status: newRideStatus,
       driver: {
         type: 'DOC_VERIFICATION',
-        ...updatedRecord,
+        id: rowId,
+        email: normEmail,
+        status,
+        adminNotes: finalNotes,
+        reviewedAt,
       },
-      created_at: updatedRecord?.submittedAt || now.toISOString(),
+      created_at: now.toISOString(),
       updated_at: reviewedAt,
     };
-    await withTimeout(supabase.from('rides').upsert([payload], { onConflict: 'id' }), 3000);
+    try {
+      await withTimeout(supabaseAdmin.from('rides').upsert([payload], { onConflict: 'id' }), 5000);
+    } catch (e) {}
+  }
+
+  // 3. Update dedicated verifications table if present
+  try {
+    await withTimeout(
+      supabaseAdmin
+        .from('verifications')
+        .update({
+          status,
+          adminNotes: finalNotes,
+          reviewedAt,
+        })
+        .or(`id.eq.${idOrEmail},email.eq.${normEmail}`),
+      5000
+    );
   } catch (err) {}
+
+  const updatedRecord = {
+    id: idOrEmail,
+    email: normEmail,
+    status,
+    adminNotes: finalNotes,
+    reviewedAt,
+  };
+
+  // Update in-memory runtime cache
+  memoryDB.verifications.set(idOrEmail, updatedRecord);
+  if (normEmail) memoryDB.verifications.set(normEmail, updatedRecord);
 
   return updatedRecord;
 }

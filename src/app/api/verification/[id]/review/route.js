@@ -13,6 +13,7 @@ export async function OPTIONS() {
 export async function POST(req, { params }) {
   try {
     const { id } = await params;
+    const decodedId = decodeURIComponent(id);
     const body = await req.json();
     const { action, adminNotes } = body;
 
@@ -26,7 +27,7 @@ export async function POST(req, { params }) {
       );
     }
 
-    const updated = await dbUpdateVerificationStatus(id, action, adminNotes);
+    const updated = await dbUpdateVerificationStatus(decodedId, action, adminNotes);
 
     if (!updated) {
       return Response.json(

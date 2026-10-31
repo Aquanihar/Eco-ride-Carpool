@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Navbar from '@/components/Navbar/Navbar';
 import Footer from '@/components/Footer/Footer';
 import {
@@ -13,7 +13,6 @@ import {
   ExternalLink,
   Mail,
   Phone,
-  User,
   Calendar,
   Eye,
   Download,
@@ -21,7 +20,6 @@ import {
   Maximize2,
 } from 'lucide-react';
 import { AppProvider } from '@/context/AppContext';
-import { supabase } from '@/lib/supabase';
 import styles from './admin.module.css';
 
 // Safely format document string into a valid displayable Data URL or Web URL
@@ -50,7 +48,6 @@ function isImageDoc(src, fileName = '') {
   if (/\.pdf$/i.test(fileName) && (src.startsWith('data:application/pdf') || src.includes('JVBERi'))) {
     return false;
   }
-  // Default to true for base64 images that may lack explicit mime-type
   return true;
 }
 
@@ -129,6 +126,15 @@ function AdminContent() {
   const [adminNotes, setAdminNotes] = useState({});
   const [previewModal, setPreviewModal] = useState(null); // { src, title, fileName, isImage, user }
 
+  // Cache loaded documents on demand { [id]: { idProofBase64, drivingLicenseBase64 } }
+  const [loadedDocs, setLoadedDocs] = useState({});
+  const [loadingDocs, setLoadingDocs] = useState({}); // { [docKey]: boolean }
+
+  // Sequential request ordering ref: prevents out-of-order race conditions
+  const requestIdRef = useRef(0);
+  const pollTimerRef = useRef(null);
+  const isMountedRef = useRef(true);
+
   // Close modal on Escape key
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -138,157 +144,125 @@ function AdminContent() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  const getDocumentSubmissionTimestamp = (r) => {
-    if (!r) return 0;
-    const subStr = r.submittedAt || r.driver?.submittedAt;
-    const tSub = subStr ? new Date(subStr).getTime() : 0;
-    const validTSub = !isNaN(tSub) ? tSub : 0;
-
-    const idStr = String(r.id || r.driver?.id || r.driver_id || '');
-    const idMatch = idStr.match(/_(\d{13})/);
-    const tId = idMatch ? parseInt(idMatch[1], 10) : 0;
-    const validTId = !isNaN(tId) ? tId : 0;
-
-    const createdStr = r.created_at || r.driver?.created_at;
-    const tCreated = createdStr ? new Date(createdStr).getTime() : 0;
-    const validTCreated = !isNaN(tCreated) ? tCreated : 0;
-
-    return Math.max(validTSub, validTId, validTCreated);
-  };
-
-  const cleanUserEmail = (rawEmail, rawId) => {
-    if (rawEmail && typeof rawEmail === 'string' && rawEmail.includes('@') && !rawEmail.startsWith('doc_')) {
-      return rawEmail.toLowerCase().trim();
-    }
-    const str = String(rawEmail || rawId || '');
-    const m = str.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+)/i);
-    return m ? m[1].toLowerCase().trim() : null;
-  };
-
+  // Fetch list of verifications solely through authoritative server-side API
   const fetchVerifications = useCallback(async (silent = false) => {
+    const currentReqId = ++requestIdRef.current;
+    if (!silent) setLoading(true);
+
     try {
-      if (!silent) setLoading(true);
-      const userMap = new Map();
+      const res = await fetch('/api/verifications');
+      if (!res.ok) {
+        throw new Error(`HTTP error ${res.status}`);
+      }
+      const data = await res.json();
 
-      // 1. Fetch from authoritative API route first (has local persistence + consolidated photos)
-      try {
-        const res = await fetch('/api/verification');
-        if (res.ok) {
-          const data = await res.json();
-          if (data.success && data.verifications && Array.isArray(data.verifications)) {
-            data.verifications.forEach((v) => {
-              if (v) {
-                const normEmail = cleanUserEmail(v.email, v.id);
-                if (normEmail) {
-                  userMap.set(normEmail, { ...v, email: normEmail, id: v.id || ('doc_' + normEmail.replace(/[^a-z0-9]/g, '_')) });
-                }
-              }
-            });
-          }
-        }
-      } catch (apiErr) {
-        console.error('API verification fetch error:', apiErr);
+      // Discard response if a newer request has already fired or component unmounted
+      if (currentReqId !== requestIdRef.current || !isMountedRef.current) {
+        return;
       }
 
-      // 2. Also check Supabase entries with fast selective query (avoids statement timeout)
-      try {
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Supabase request timeout')), 8000)
-        );
-        const queryPromise = supabase
-          .from('rides')
-          .select('id, driver_id, status, created_at, updated_at, driver')
-          .ilike('status', 'VERIFICATION_%')
-          .order('created_at', { ascending: false })
-          .limit(60);
-
-        const { data: rideRows } = await Promise.race([queryPromise, timeoutPromise]);
-
-        if (rideRows && rideRows.length > 0) {
-          // Group Supabase rows by cleaned user email
-          const sbUserGroups = new Map();
-          rideRows.forEach((r) => {
-            if (r.driver) {
-              const uEmail = cleanUserEmail(r.driver.email, r.id);
-              if (uEmail) {
-                if (!sbUserGroups.has(uEmail)) sbUserGroups.set(uEmail, []);
-                sbUserGroups.get(uEmail).push(r);
-              }
-            }
-          });
-
-          sbUserGroups.forEach((rows, uEmail) => {
-            // Sort rows for this user by submission timestamp: newest first
-            rows.sort((a, b) => getDocumentSubmissionTimestamp(b) - getDocumentSubmissionTimestamp(a));
-            const existing = userMap.get(uEmail);
-
-            // Find newest row that has document photos
-            const newestRowWithPhotos = rows.find(
-              (r) => (r.driver?.idProofBase64 && r.driver.idProofBase64.length > 50) ||
-                     (r.driver?.drivingLicenseBase64 && r.driver.drivingLicenseBase64.length > 50)
-            ) || rows[0];
-
-            const sbSubTime = getDocumentSubmissionTimestamp(newestRowWithPhotos);
-            const existingSubTime = getDocumentSubmissionTimestamp(existing);
-
-            // Only update if Supabase has a newer submission than existing API data, OR if not present in API
-            if (!existing || sbSubTime > existingSubTime) {
-              const rStatus = newestRowWithPhotos.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
-                : newestRowWithPhotos.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
-                : (newestRowWithPhotos.driver?.status || 'PENDING');
-
-              userMap.set(uEmail, {
-                ...(existing || {}),
-                ...newestRowWithPhotos.driver,
-                id: newestRowWithPhotos.driver?.id || newestRowWithPhotos.id || existing?.id,
-                email: uEmail,
-                status: rStatus,
-                rowId: newestRowWithPhotos.id,
-                idProofBase64: newestRowWithPhotos.driver?.idProofBase64 || existing?.idProofBase64 || '',
-                idProofName: newestRowWithPhotos.driver?.idProofName || existing?.idProofName || 'Identity Document',
-                drivingLicenseBase64: newestRowWithPhotos.driver?.drivingLicenseBase64 || existing?.drivingLicenseBase64 || '',
-                drivingLicenseName: newestRowWithPhotos.driver?.drivingLicenseName || existing?.drivingLicenseName || 'Driving License',
-                submittedAt: newestRowWithPhotos.driver?.submittedAt || newestRowWithPhotos.created_at,
-                reviewedAt: newestRowWithPhotos.driver?.reviewedAt || (rStatus !== 'PENDING' ? newestRowWithPhotos.updated_at : null),
-                adminNotes: newestRowWithPhotos.driver?.adminNotes || '',
-              });
-            }
-          });
-        }
-      } catch (sbErr) {
-        // Supabase error or timeout; backend API data in userMap is retained
+      if (data.success && Array.isArray(data.verifications)) {
+        setVerifications(data.verifications);
       }
-
-      const list = Array.from(userMap.values());
-      const sorted = list.sort((a, b) => getDocumentSubmissionTimestamp(b) - getDocumentSubmissionTimestamp(a));
-      setVerifications(sorted);
     } catch (err) {
-      console.error('Failed to fetch verifications:', err);
+      if (currentReqId === requestIdRef.current) {
+        console.warn('API verification fetch failed:', err.message);
+      }
     } finally {
-      if (!silent) setLoading(false);
+      if (currentReqId === requestIdRef.current && isMountedRef.current) {
+        if (!silent) setLoading(false);
+        // Replace setInterval with scheduled timeout after current response finishes
+        if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = setTimeout(() => {
+          fetchVerifications(true);
+        }, 5000);
+      }
     }
   }, []);
 
   useEffect(() => {
-    fetchVerifications();
-    const interval = setInterval(() => fetchVerifications(true), 8000);
-
-    const channel = supabase
-      .channel('realtime_admin_verifications')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'rides' },
-        () => {
-          fetchVerifications(true);
-        }
-      )
-      .subscribe();
+    isMountedRef.current = true;
+    fetchVerifications(false);
 
     return () => {
-      clearInterval(interval);
-      supabase.removeChannel(channel);
+      isMountedRef.current = false;
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
     };
   }, [fetchVerifications]);
+
+  // Load document image on demand when inspected or downloaded
+  const fetchDocOnDemand = async (item, docType) => {
+    const field = docType === 'idProof' ? 'idProofBase64' : 'drivingLicenseBase64';
+    const cached = loadedDocs[item.id];
+    if (cached && cached[field]) {
+      return cached[field];
+    }
+
+    const loadKey = `${item.id}_${docType}`;
+    setLoadingDocs((prev) => ({ ...prev, [loadKey]: true }));
+
+    try {
+      const res = await fetch(`/api/verifications/${encodeURIComponent(item.id)}`);
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      const data = await res.json();
+      if (data.success && data.verification) {
+        setLoadedDocs((prev) => ({
+          ...prev,
+          [item.id]: {
+            ...(prev[item.id] || {}),
+            idProofBase64: data.verification.idProofBase64 || '',
+            drivingLicenseBase64: data.verification.drivingLicenseBase64 || '',
+          },
+        }));
+        return data.verification[field] || '';
+      }
+    } catch (err) {
+      console.error('Error fetching document on demand:', err);
+    } finally {
+      setLoadingDocs((prev) => ({ ...prev, [loadKey]: false }));
+    }
+    return '';
+  };
+
+  const handleOpenPreview = async (item, docType) => {
+    const isIdProof = docType === 'idProof';
+    const fileName = isIdProof
+      ? (item.idProofName || 'aadhaar_card.jpg')
+      : (item.drivingLicenseName || 'driving_license.jpg');
+    const title = isIdProof
+      ? `Aadhaar / ID Document - ${item.fullName || item.email}`
+      : `Driving License - ${item.fullName || item.email}`;
+
+    const rawSrc = await fetchDocOnDemand(item, docType);
+    if (!rawSrc) {
+      alert('Could not load document preview. Please check your connection.');
+      return;
+    }
+
+    const formattedSrc = formatDocSrc(rawSrc);
+    const isImg = isImageDoc(formattedSrc, fileName);
+
+    setPreviewModal({
+      src: formattedSrc,
+      title,
+      fileName,
+      isImage: isImg,
+      user: item.fullName,
+    });
+  };
+
+  const handleDownload = async (item, docType) => {
+    const isIdProof = docType === 'idProof';
+    const fileName = isIdProof
+      ? (item.idProofName || 'aadhaar_card.jpg')
+      : (item.drivingLicenseName || 'driving_license.jpg');
+    const rawSrc = await fetchDocOnDemand(item, docType);
+    if (rawSrc) {
+      downloadDocument(formatDocSrc(rawSrc), fileName);
+    } else {
+      alert('Failed to download document.');
+    }
+  };
 
   const handleReview = async (id, action) => {
     const status = action === 'APPROVE' ? 'APPROVED' : 'REJECTED';
@@ -298,75 +272,40 @@ function AdminContent() {
     setActionInProgress((prev) => ({ ...prev, [id]: true }));
 
     const item = verifications.find((v) => v.id === id || v.email === id);
-    const normEmail = cleanUserEmail(item?.email, id) || (item?.email || id).toLowerCase().trim();
-    const updateId = 'doc_' + normEmail.replace(/[^a-z0-9]/g, '_');
+    const targetId = item?.id || id;
 
     // Optimistically update UI
     setVerifications((prev) =>
       prev.map((v) =>
-        v.id === id || cleanUserEmail(v.email, v.id) === normEmail
+        v.id === id || v.email === item?.email
           ? { ...v, status, adminNotes: note, reviewedAt }
           : v
       )
     );
 
     try {
-      const updatedDriver = {
-        ...(item || {}),
-        id: updateId,
-        email: normEmail,
-        status,
-        adminNotes: note,
-        reviewedAt,
-        idProofBase64: item?.idProofBase64 || '',
-        idProofName: item?.idProofName || '',
-        drivingLicenseBase64: item?.drivingLicenseBase64 || '',
-        drivingLicenseName: item?.drivingLicenseName || '',
-      };
+      const res = await fetch(`/api/verifications/${encodeURIComponent(targetId)}/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action,
+          adminNotes: note,
+          email: item?.email,
+          rowId: item?.rowId,
+        }),
+      });
 
-      // 1. Direct write to Supabase
-      try {
-        const payload = {
-          id: updateId,
-          driver_id: updateId,
-          origin: 'Verification Portal',
-          destination: 'Document Verification',
-          origin_latitude: 0,
-          origin_longitude: 0,
-          destination_latitude: 0,
-          destination_longitude: 0,
-          departure_date: now.toISOString().split('T')[0],
-          departure_time: '00:00',
-          total_seats: 1,
-          available_seats: 1,
-          price_per_seat: 0,
-          status: action === 'APPROVE' ? 'VERIFICATION_APPROVED' : 'VERIFICATION_REJECTED',
-          driver: {
-            type: 'DOC_VERIFICATION',
-            ...updatedDriver,
-          },
-          created_at: item?.submittedAt || now.toISOString(),
-          updated_at: reviewedAt,
-        };
-        await supabase.from('rides').upsert([payload], { onConflict: 'id' });
-      } catch (sbErr) {
-        console.error('Supabase admin review insert error:', sbErr);
+      const data = await res.json();
+      if (!data.success) {
+        throw new Error(data.message || 'Failed to update review status');
       }
 
-      // 2. Also call API route with normalized email
-      try {
-        await fetch('/api/verification/' + encodeURIComponent(normEmail) + '/review', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action, adminNotes: note }),
-        });
-      } catch (e) {}
-
-      // Refresh to confirm live state from database silently without loading spinner jump
+      // Refresh to confirm live state from Supabase
       await fetchVerifications(true);
     } catch (err) {
       console.error('Error updating review:', err);
-      alert('Error updating review status.');
+      alert('Error updating review status: ' + err.message);
+      await fetchVerifications(true);
     } finally {
       setActionInProgress((prev) => ({ ...prev, [id]: false }));
     }
@@ -395,7 +334,14 @@ function AdminContent() {
             </p>
           </div>
           <div className={styles.headerActions}>
-            <button className={styles.refreshBtn} onClick={() => fetchVerifications(false)} disabled={loading}>
+            <button
+              className={styles.refreshBtn}
+              onClick={() => {
+                if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+                fetchVerifications(false);
+              }}
+              disabled={loading}
+            >
               <RefreshCw size={16} className={loading ? 'spin' : ''} /> Refresh
             </button>
           </div>
@@ -463,10 +409,15 @@ function AdminContent() {
           <div className={styles.cardsGrid}>
             {filteredVerifications.map((item) => {
               const isWorking = actionInProgress[item.id];
-              const aadharSrc = formatDocSrc(item.idProofBase64);
-              const aadharIsImg = isImageDoc(aadharSrc, item.idProofName);
-              const dlSrc = formatDocSrc(item.drivingLicenseBase64);
-              const dlIsImg = isImageDoc(dlSrc, item.drivingLicenseName);
+              const cachedDocs = loadedDocs[item.id] || {};
+
+              const aadharSrc = cachedDocs.idProofBase64 ? formatDocSrc(cachedDocs.idProofBase64) : '';
+              const aadharIsImg = aadharSrc ? isImageDoc(aadharSrc, item.idProofName) : false;
+              const dlSrc = cachedDocs.drivingLicenseBase64 ? formatDocSrc(cachedDocs.drivingLicenseBase64) : '';
+              const dlIsImg = dlSrc ? isImageDoc(dlSrc, item.drivingLicenseName) : false;
+
+              const isAadharLoading = Boolean(loadingDocs[`${item.id}_idProof`]);
+              const isDlLoading = Boolean(loadingDocs[`${item.id}_drivingLicense`]);
 
               return (
                 <div key={item.id} className={styles.verifCard}>
@@ -484,7 +435,8 @@ function AdminContent() {
                         )}
                         <span>
                           <Calendar size={15} />{' '}
-                          {new Date(item.submittedAt || Date.now()).toLocaleDateString()} {new Date(item.submittedAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          {new Date(item.submittedAt || Date.now()).toLocaleDateString()}{' '}
+                          {new Date(item.submittedAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
                       </div>
                     </div>
@@ -520,14 +472,8 @@ function AdminContent() {
                       <div
                         className={styles.previewBox}
                         onClick={() => {
-                          if (aadharSrc) {
-                            setPreviewModal({
-                              src: aadharSrc,
-                              title: `Aadhaar / ID Document - ${item.fullName || item.email}`,
-                              fileName: item.idProofName || 'aadhaar_card.jpg',
-                              isImage: aadharIsImg,
-                              user: item.fullName,
-                            });
+                          if (item.hasIdProof) {
+                            handleOpenPreview(item, 'idProof');
                           }
                         }}
                       >
@@ -550,6 +496,16 @@ function AdminContent() {
                               Click to view PDF
                             </span>
                           </div>
+                        ) : item.hasIdProof ? (
+                          <div className={styles.pdfFallback}>
+                            <FileText size={42} color="#0284c7" />
+                            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                              {item.idProofName || 'Identity Document'}
+                            </span>
+                            <span style={{ fontSize: '0.8rem', color: 'var(--primary-500)' }}>
+                              {isAadharLoading ? 'Loading document...' : 'Click to inspect / view document'}
+                            </span>
+                          </div>
                         ) : (
                           <div className={styles.pdfFallback}>
                             <FileText size={36} color="#94a3b8" />
@@ -560,27 +516,21 @@ function AdminContent() {
 
                       <div className={styles.docFooterRow}>
                         <span className={styles.docFooter}>{item.idProofName || 'Identity Document'}</span>
-                        {aadharSrc && (
+                        {item.hasIdProof && (
                           <div className={styles.docActions}>
                             <button
                               type="button"
                               className={styles.inspectBtn}
-                              onClick={() =>
-                                setPreviewModal({
-                                  src: aadharSrc,
-                                  title: `Aadhaar / ID Document - ${item.fullName || item.email}`,
-                                  fileName: item.idProofName || 'aadhaar_card.jpg',
-                                  isImage: aadharIsImg,
-                                  user: item.fullName,
-                                })
-                              }
+                              onClick={() => handleOpenPreview(item, 'idProof')}
+                              disabled={isAadharLoading}
                             >
-                              <Maximize2 size={13} /> Inspect
+                              <Maximize2 size={13} /> {isAadharLoading ? 'Loading...' : 'Inspect'}
                             </button>
                             <button
                               type="button"
                               className={styles.downloadBtn}
-                              onClick={() => downloadDocument(aadharSrc, item.idProofName || 'aadhaar_card.jpg')}
+                              onClick={() => handleDownload(item, 'idProof')}
+                              disabled={isAadharLoading}
                               title="Download original file"
                             >
                               <Download size={13} /> Download
@@ -600,14 +550,8 @@ function AdminContent() {
                       <div
                         className={styles.previewBox}
                         onClick={() => {
-                          if (dlSrc) {
-                            setPreviewModal({
-                              src: dlSrc,
-                              title: `Driving License - ${item.fullName || item.email}`,
-                              fileName: item.drivingLicenseName || 'driving_license.jpg',
-                              isImage: dlIsImg,
-                              user: item.fullName,
-                            });
+                          if (item.hasDrivingLicense) {
+                            handleOpenPreview(item, 'drivingLicense');
                           }
                         }}
                       >
@@ -630,6 +574,16 @@ function AdminContent() {
                               Click to view PDF
                             </span>
                           </div>
+                        ) : item.hasDrivingLicense ? (
+                          <div className={styles.pdfFallback}>
+                            <FileText size={42} color="#10b981" />
+                            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                              {item.drivingLicenseName || 'Driving License'}
+                            </span>
+                            <span style={{ fontSize: '0.8rem', color: 'var(--primary-500)' }}>
+                              {isDlLoading ? 'Loading document...' : 'Click to inspect / view document'}
+                            </span>
+                          </div>
                         ) : (
                           <div className={styles.pdfFallback}>
                             <FileText size={36} color="#94a3b8" />
@@ -640,27 +594,21 @@ function AdminContent() {
 
                       <div className={styles.docFooterRow}>
                         <span className={styles.docFooter}>{item.drivingLicenseName || 'Driving License'}</span>
-                        {dlSrc && (
+                        {item.hasDrivingLicense && (
                           <div className={styles.docActions}>
                             <button
                               type="button"
                               className={styles.inspectBtn}
-                              onClick={() =>
-                                setPreviewModal({
-                                  src: dlSrc,
-                                  title: `Driving License - ${item.fullName || item.email}`,
-                                  fileName: item.drivingLicenseName || 'driving_license.jpg',
-                                  isImage: dlIsImg,
-                                  user: item.fullName,
-                                })
-                              }
+                              onClick={() => handleOpenPreview(item, 'drivingLicense')}
+                              disabled={isDlLoading}
                             >
-                              <Maximize2 size={13} /> Inspect
+                              <Maximize2 size={13} /> {isDlLoading ? 'Loading...' : 'Inspect'}
                             </button>
                             <button
                               type="button"
                               className={styles.downloadBtn}
-                              onClick={() => downloadDocument(dlSrc, item.drivingLicenseName || 'driving_license.jpg')}
+                              onClick={() => handleDownload(item, 'drivingLicense')}
+                              disabled={isDlLoading}
                               title="Download original file"
                             >
                               <Download size={13} /> Download
