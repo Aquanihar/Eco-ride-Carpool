@@ -231,13 +231,6 @@ export default function LoginPage({ onComplete }) {
     if (step === 1 && validateStep1()) {
       setVerificationRecord(null);
       setStep(2);
-      try {
-        const res = await fetch(`/api/verification?email=${encodeURIComponent(formData.email.trim().toLowerCase())}`);
-        const data = await res.json();
-        if (data.success && data.verification && data.verification.status !== 'NOT_SUBMITTED') {
-          setVerificationRecord(data.verification);
-        }
-      } catch (e) {}
     }
   };
 
@@ -902,7 +895,16 @@ export default function LoginPage({ onComplete }) {
                     Back
                   </button>
 
-                  {(!verificationRecord || verificationRecord.status === 'REJECTED' || (formData.idProof && formData.drivingLicense)) ? (
+                  {verificationRecord?.status === 'PENDING' ? (
+                    <button
+                      type="button"
+                      className={`${styles.primaryBtn} ${checkingStatus ? styles.btnLoading : ''}`}
+                      onClick={checkVerificationStatus}
+                      disabled={checkingStatus}
+                    >
+                      {checkingStatus ? 'Checking Backend...' : 'Check Verification Status'}
+                    </button>
+                  ) : (
                     <button
                       type="button"
                       className={`${styles.primaryBtn} ${docVerifying ? styles.btnLoading : ''}`}
@@ -912,39 +914,16 @@ export default function LoginPage({ onComplete }) {
                       {docVerifying ? (
                         <>
                           <span className={styles.spinner} />
-                          Sending to Database...
+                          Submitting Your Documents...
                         </>
                       ) : (
                         <>
-                          Submit Documents for Verification
+                          Submit Your Documents
                           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <polyline points="20 6 9 17 4 12" />
                           </svg>
                         </>
                       )}
-                    </button>
-                  ) : verificationRecord.status === 'PENDING' ? (
-                    <button
-                      type="button"
-                      className={`${styles.primaryBtn} ${checkingStatus ? styles.btnLoading : ''}`}
-                      onClick={checkVerificationStatus}
-                      disabled={checkingStatus}
-                    >
-                      {checkingStatus ? 'Checking Backend...' : 'Check Backend Status'}
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className={styles.primaryBtn}
-                      onClick={async () => {
-                        await requestOtpDispatch();
-                        setStep(3);
-                      }}
-                    >
-                      Proceed to Email OTP
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="9 18 15 12 9 6" />
-                      </svg>
                     </button>
                   )}
                 </div>
