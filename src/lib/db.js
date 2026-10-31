@@ -1067,22 +1067,29 @@ export async function dbCreateDocumentVerification(data) {
   return record;
 }
 
-function getRowTimestamp(r) {
+export function getDocumentSubmissionTimestamp(r) {
   if (!r) return 0;
-  const tRev = (r.reviewedAt || r.driver?.reviewedAt) ? new Date(r.reviewedAt || r.driver?.reviewedAt).getTime() : 0;
-  const tSub = (r.submittedAt || r.driver?.submittedAt) ? new Date(r.submittedAt || r.driver?.submittedAt).getTime() : 0;
-  const idMatch = (r.id || '').match(/_(\d{13})$/);
+  const subStr = r.submittedAt || r.driver?.submittedAt;
+  const tSub = subStr ? new Date(subStr).getTime() : 0;
+  const validTSub = !isNaN(tSub) ? tSub : 0;
+
+  const idStr = String(r.id || r.driver?.id || r.driver_id || '');
+  const idMatch = idStr.match(/_(\d{13})/);
   const tId = idMatch ? parseInt(idMatch[1], 10) : 0;
-  const tCreated = r.created_at ? new Date(r.created_at).getTime() : 0;
-  const tUpdated = r.updated_at ? new Date(r.updated_at).getTime() : 0;
-  return Math.max(tRev, tSub, tId, tCreated, tUpdated);
+  const validTId = !isNaN(tId) ? tId : 0;
+
+  const createdStr = r.created_at || r.driver?.created_at;
+  const tCreated = createdStr ? new Date(createdStr).getTime() : 0;
+  const validTCreated = !isNaN(tCreated) ? tCreated : 0;
+
+  return Math.max(validTSub, validTId, validTCreated);
 }
 
 function cleanUserEmail(rawEmail, rawId) {
-  if (rawEmail && rawEmail.includes('@') && !rawEmail.startsWith('doc_')) {
+  if (rawEmail && typeof rawEmail === 'string' && rawEmail.includes('@') && !rawEmail.startsWith('doc_')) {
     return rawEmail.toLowerCase().trim();
   }
-  const str = rawEmail || rawId || '';
+  const str = String(rawEmail || rawId || '');
   const m = str.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+)/i);
   return m ? m[1].toLowerCase().trim() : null;
 }
@@ -1090,17 +1097,15 @@ function cleanUserEmail(rawEmail, rawId) {
 export async function dbGetVerificationByEmail(email) {
   loadVerificationsFromFile();
   if (!email) return null;
-  const normEmail = email.toLowerCase().trim();
+  const normEmail = cleanUserEmail(email, email) || email.toLowerCase().trim();
 
-  // Find all matching local records and pick the latest one
-  const matchingLocal = [];
+  // Find all matching local records
+  const candidates = [];
   for (const [, val] of memoryDB.verifications.entries()) {
     if (val && cleanUserEmail(val.email, val.id) === normEmail) {
-      matchingLocal.push(val);
+      candidates.push(val);
     }
   }
-  matchingLocal.sort((a, b) => getRowTimestamp(b) - getRowTimestamp(a));
-  const localRec = matchingLocal[0] || null;
 
   // 1. Check Supabase rides storage with fast optimized query
   try {
@@ -1115,51 +1120,82 @@ export async function dbGetVerificationByEmail(email) {
     );
 
     if (rows && rows.length > 0) {
-      const userRows = rows.filter(
-        (r) => r.driver && cleanUserEmail(r.driver.email, r.id) === normEmail
-      );
-      if (userRows.length > 0) {
-        userRows.sort((a, b) => getRowTimestamp(b) - getRowTimestamp(a));
-        const latest = userRows[0];
-        const status = latest.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
-          : latest.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
-          : (latest.driver?.status || localRec?.status || 'PENDING');
-
-        // Find newest row that has document photos
-        const docRow = userRows.find(
-          (r) => (r.driver?.idProofBase64 && r.driver.idProofBase64.length > 50) ||
-                 (r.driver?.drivingLicenseBase64 && r.driver.drivingLicenseBase64.length > 50)
-        ) || latest;
-
-        const resolvedIdProof = docRow.driver?.idProofBase64 || localRec?.idProofBase64 || '';
-        const resolvedIdProofName = docRow.driver?.idProofName || localRec?.idProofName || 'Identity Document';
-        const resolvedDl = docRow.driver?.drivingLicenseBase64 || localRec?.drivingLicenseBase64 || '';
-        const resolvedDlName = docRow.driver?.drivingLicenseName || localRec?.drivingLicenseName || 'Driving License';
-
-        const rec = {
-          ...(localRec || {}),
-          ...latest.driver,
-          id: latest.driver?.id || latest.id || localRec?.id,
-          email: normEmail,
-          status,
-          rowId: latest.id,
-          idProofBase64: resolvedIdProof,
-          idProofName: resolvedIdProofName,
-          drivingLicenseBase64: resolvedDl,
-          drivingLicenseName: resolvedDlName,
-          submittedAt: latest.driver?.submittedAt || localRec?.submittedAt || new Date().toISOString(),
-          reviewedAt: latest.driver?.reviewedAt || (status !== 'PENDING' ? new Date(getRowTimestamp(latest)).toISOString() : null) || localRec?.reviewedAt,
-          adminNotes: latest.driver?.adminNotes || localRec?.adminNotes || '',
-        };
-        memoryDB.verifications.set(rec.id, rec);
-        memoryDB.verifications.set(normEmail, rec);
-        return rec;
-      }
+      rows.forEach((r) => {
+        if (r.driver && cleanUserEmail(r.driver.email, r.id) === normEmail) {
+          const status = r.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
+            : r.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
+            : (r.driver?.status || 'PENDING');
+          candidates.push({
+            ...r.driver,
+            id: r.driver.id || r.id,
+            email: normEmail,
+            status,
+            rowId: r.id,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+            submittedAt: r.driver?.submittedAt || r.created_at,
+            reviewedAt: r.driver?.reviewedAt || (status !== 'PENDING' ? r.updated_at : null),
+            adminNotes: r.driver?.adminNotes || '',
+          });
+        }
+      });
     }
   } catch (err) {}
 
-  if (localRec) return localRec;
-  return null;
+  if (candidates.length === 0) return null;
+
+  // Sort candidate submissions strictly by submission timestamp: newest first
+  candidates.sort((a, b) => getDocumentSubmissionTimestamp(b) - getDocumentSubmissionTimestamp(a));
+
+  // Find newest record that has photo/document data
+  const docRecord = candidates.find(
+    (r) => (r.idProofBase64 && r.idProofBase64.length > 50) ||
+           (r.drivingLicenseBase64 && r.drivingLicenseBase64.length > 50)
+  ) || candidates[0];
+
+  const latest = candidates[0];
+  const docSubTime = getDocumentSubmissionTimestamp(docRecord);
+
+  // Find newest review record (if any)
+  const reviewedRecord = candidates.find(
+    (r) => r.status && r.status !== 'PENDING' && r.reviewedAt
+  );
+  const revTime = reviewedRecord?.reviewedAt ? new Date(reviewedRecord.reviewedAt).getTime() : 0;
+
+  let finalStatus = 'PENDING';
+  let finalReviewedAt = null;
+  let finalNotes = '';
+
+  if (reviewedRecord && revTime >= docSubTime) {
+    finalStatus = reviewedRecord.status;
+    finalReviewedAt = reviewedRecord.reviewedAt;
+    finalNotes = reviewedRecord.adminNotes || '';
+  } else if (latest.status && latest.status !== 'PENDING' && !reviewedRecord) {
+    finalStatus = latest.status;
+    finalReviewedAt = latest.reviewedAt;
+    finalNotes = latest.adminNotes || '';
+  }
+
+  const rec = {
+    ...docRecord,
+    ...latest,
+    id: docRecord.id || latest.id || ('doc_' + normEmail.replace(/[^a-z0-9]/g, '_')),
+    email: normEmail,
+    fullName: docRecord.fullName || latest.fullName || 'User',
+    phone: docRecord.phone || latest.phone || '',
+    status: finalStatus,
+    idProofBase64: docRecord.idProofBase64 || '',
+    idProofName: docRecord.idProofName || 'Identity Document',
+    drivingLicenseBase64: docRecord.drivingLicenseBase64 || '',
+    drivingLicenseName: docRecord.drivingLicenseName || 'Driving License',
+    submittedAt: docRecord.submittedAt || latest.submittedAt || new Date().toISOString(),
+    reviewedAt: finalReviewedAt,
+    adminNotes: finalNotes,
+  };
+
+  memoryDB.verifications.set(rec.id, rec);
+  memoryDB.verifications.set(normEmail, rec);
+  return rec;
 }
 
 export async function dbGetAllVerifications() {
@@ -1203,6 +1239,8 @@ export async function dbGetAllVerifications() {
               email,
               status,
               rowId: r.id,
+              created_at: r.created_at,
+              updated_at: r.updated_at,
               submittedAt: r.driver?.submittedAt || r.created_at,
               reviewedAt: r.driver?.reviewedAt || (status !== 'PENDING' ? r.updated_at : null),
               adminNotes: r.driver?.adminNotes || '',
@@ -1218,45 +1256,58 @@ export async function dbGetAllVerifications() {
   // Consolidate exactly ONE authoritative entry per user email
   const consolidatedList = [];
   userMap.forEach((records, email) => {
-    // Sort submissions newest first
-    records.sort((a, b) => getRowTimestamp(b) - getRowTimestamp(a));
-    const latest = records[0];
+    // Sort submissions newest first by upload/submission timestamp
+    records.sort((a, b) => getDocumentSubmissionTimestamp(b) - getDocumentSubmissionTimestamp(a));
 
     // Find newest record that has photo/document data
     const docRecord = records.find(
       (r) => (r.idProofBase64 && r.idProofBase64.length > 50) ||
              (r.drivingLicenseBase64 && r.drivingLicenseBase64.length > 50)
-    ) || latest;
+    ) || records[0];
+
+    const latest = records[0];
+    const docSubTime = getDocumentSubmissionTimestamp(docRecord);
+
+    // Find newest review record (if any)
+    const reviewedRecord = records.find(
+      (r) => r.status && r.status !== 'PENDING' && r.reviewedAt
+    );
+    const revTime = reviewedRecord?.reviewedAt ? new Date(reviewedRecord.reviewedAt).getTime() : 0;
+
+    let finalStatus = 'PENDING';
+    let finalReviewedAt = null;
+    let finalNotes = '';
+
+    if (reviewedRecord && revTime >= docSubTime) {
+      finalStatus = reviewedRecord.status;
+      finalReviewedAt = reviewedRecord.reviewedAt;
+      finalNotes = reviewedRecord.adminNotes || '';
+    } else if (latest.status && latest.status !== 'PENDING' && !reviewedRecord) {
+      finalStatus = latest.status;
+      finalReviewedAt = latest.reviewedAt;
+      finalNotes = latest.adminNotes || '';
+    }
 
     const idProofBase64 = docRecord.idProofBase64 || latest.idProofBase64 || '';
     const idProofName = docRecord.idProofName || latest.idProofName || 'Identity Document';
     const drivingLicenseBase64 = docRecord.drivingLicenseBase64 || latest.drivingLicenseBase64 || '';
     const drivingLicenseName = docRecord.drivingLicenseName || latest.drivingLicenseName || 'Driving License';
 
-    // Status logic:
-    // If user submitted new documents after previous review, status is PENDING for new review
-    const latestSubTime = new Date(latest.submittedAt || 0).getTime();
-    const latestRevTime = latest.reviewedAt ? new Date(latest.reviewedAt).getTime() : 0;
-    let finalStatus = latest.status || 'PENDING';
-    if (latestRevTime && latestSubTime > latestRevTime) {
-      finalStatus = 'PENDING';
-    }
-
     consolidatedList.push({
       ...docRecord,
       ...latest,
-      id: latest.id || ('doc_' + email.replace(/[^a-z0-9]/g, '_')),
+      id: docRecord.id || latest.id || ('doc_' + email.replace(/[^a-z0-9]/g, '_')),
       email,
-      fullName: latest.fullName || docRecord.fullName || 'User',
-      phone: latest.phone || docRecord.phone || '',
+      fullName: docRecord.fullName || latest.fullName || 'User',
+      phone: docRecord.phone || latest.phone || '',
       status: finalStatus,
       idProofBase64,
       idProofName,
       drivingLicenseBase64,
       drivingLicenseName,
-      submittedAt: latest.submittedAt || docRecord.submittedAt || new Date().toISOString(),
-      reviewedAt: finalStatus === 'PENDING' ? null : (latest.reviewedAt || docRecord.reviewedAt),
-      adminNotes: latest.adminNotes || docRecord.adminNotes || '',
+      submittedAt: docRecord.submittedAt || latest.submittedAt || new Date().toISOString(),
+      reviewedAt: finalReviewedAt,
+      adminNotes: finalNotes,
     });
   });
 
@@ -1267,7 +1318,7 @@ export async function dbGetAllVerifications() {
   });
 
   return consolidatedList.sort(
-    (a, b) => getRowTimestamp(b) - getRowTimestamp(a)
+    (a, b) => getDocumentSubmissionTimestamp(b) - getDocumentSubmissionTimestamp(a)
   );
 }
 
@@ -1277,34 +1328,27 @@ export async function dbUpdateVerificationStatus(idOrEmail, action, adminNotes =
   const now = new Date();
   const reviewedAt = now.toISOString();
 
-  // Find existing record in memory by id first, then fallback to email
-  let record = memoryDB.verifications.get(idOrEmail);
-  if (!record) {
-    for (const [, val] of memoryDB.verifications.entries()) {
-      if (val.id === idOrEmail || val.email.toLowerCase() === idOrEmail.toLowerCase()) {
-        record = val;
-        break;
-      }
-    }
+  const normEmail = cleanUserEmail(idOrEmail, idOrEmail) || (typeof idOrEmail === 'string' ? idOrEmail.toLowerCase().trim() : '');
+
+  // Retrieve the user's latest authoritative verification record with newest documents
+  let record = await dbGetVerificationByEmail(normEmail);
+
+  if (!record && idOrEmail) {
+    record = memoryDB.verifications.get(idOrEmail) || null;
   }
 
   const defaultNotes = status === 'REJECTED'
     ? 'Invalid documents try with Original documents'
     : 'Verified successfully.';
 
-  // If not in memory, fetch from Supabase
-  if (!record) {
-    record = await dbGetVerificationByEmail(idOrEmail);
-  }
-
   const finalNotes = adminNotes || defaultNotes;
-  const updateId = record?.id || idOrEmail;
-  const normEmail = (record?.email || idOrEmail).toLowerCase().trim();
+  const userEmail = record?.email || normEmail;
+  const updateId = record?.id || ('doc_' + userEmail.replace(/[^a-z0-9]/g, '_'));
 
   const updatedRecord = {
     ...(record || {}),
     id: updateId,
-    email: normEmail,
+    email: userEmail,
     status,
     adminNotes: finalNotes,
     reviewedAt,
@@ -1315,6 +1359,7 @@ export async function dbUpdateVerificationStatus(idOrEmail, action, adminNotes =
   };
 
   memoryDB.verifications.set(updateId, updatedRecord);
+  memoryDB.verifications.set(userEmail, updatedRecord);
   saveVerificationsToFile();
 
   // 1. Update in dedicated verifications table with timeout
@@ -1327,7 +1372,7 @@ export async function dbUpdateVerificationStatus(idOrEmail, action, adminNotes =
           adminNotes: finalNotes,
           reviewedAt,
         })
-        .or(`id.eq.${updateId},email.eq.${normEmail}`),
+        .or(`id.eq.${updateId},email.eq.${userEmail}`),
       1500
     );
   } catch (err) {}

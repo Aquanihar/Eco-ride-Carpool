@@ -138,22 +138,29 @@ function AdminContent() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  const getRowTimestamp = (r) => {
+  const getDocumentSubmissionTimestamp = (r) => {
     if (!r) return 0;
-    const tRev = (r.reviewedAt || r.driver?.reviewedAt) ? new Date(r.reviewedAt || r.driver?.reviewedAt).getTime() : 0;
-    const tSub = (r.submittedAt || r.driver?.submittedAt) ? new Date(r.submittedAt || r.driver?.submittedAt).getTime() : 0;
-    const idMatch = (r.id || '').match(/_(\d{13})$/);
+    const subStr = r.submittedAt || r.driver?.submittedAt;
+    const tSub = subStr ? new Date(subStr).getTime() : 0;
+    const validTSub = !isNaN(tSub) ? tSub : 0;
+
+    const idStr = String(r.id || r.driver?.id || r.driver_id || '');
+    const idMatch = idStr.match(/_(\d{13})/);
     const tId = idMatch ? parseInt(idMatch[1], 10) : 0;
-    const tCreated = r.created_at ? new Date(r.created_at).getTime() : 0;
-    const tUpdated = r.updated_at ? new Date(r.updated_at).getTime() : 0;
-    return Math.max(tRev, tSub, tId, tCreated, tUpdated);
+    const validTId = !isNaN(tId) ? tId : 0;
+
+    const createdStr = r.created_at || r.driver?.created_at;
+    const tCreated = createdStr ? new Date(createdStr).getTime() : 0;
+    const validTCreated = !isNaN(tCreated) ? tCreated : 0;
+
+    return Math.max(validTSub, validTId, validTCreated);
   };
 
   const cleanUserEmail = (rawEmail, rawId) => {
-    if (rawEmail && rawEmail.includes('@') && !rawEmail.startsWith('doc_')) {
+    if (rawEmail && typeof rawEmail === 'string' && rawEmail.includes('@') && !rawEmail.startsWith('doc_')) {
       return rawEmail.toLowerCase().trim();
     }
-    const str = rawEmail || rawId || '';
+    const str = String(rawEmail || rawId || '');
     const m = str.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+)/i);
     return m ? m[1].toLowerCase().trim() : null;
   };
@@ -163,7 +170,7 @@ function AdminContent() {
       if (!silent) setLoading(true);
       const userMap = new Map();
 
-      // 1. Fetch from authoritative API route first (has local persistence + photos)
+      // 1. Fetch from authoritative API route first (has local persistence + consolidated photos)
       try {
         const res = await fetch('/api/verification');
         if (res.ok) {
@@ -183,7 +190,7 @@ function AdminContent() {
         console.error('API verification fetch error:', apiErr);
       }
 
-      // 2. Also merge Supabase entries with fast selective query (avoids statement timeout)
+      // 2. Also check Supabase entries with fast selective query (avoids statement timeout)
       try {
         const timeoutPromise = new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Supabase request timeout')), 8000)
@@ -198,64 +205,53 @@ function AdminContent() {
         const { data: rideRows } = await Promise.race([queryPromise, timeoutPromise]);
 
         if (rideRows && rideRows.length > 0) {
+          // Group Supabase rows by cleaned user email
+          const sbUserGroups = new Map();
           rideRows.forEach((r) => {
             if (r.driver) {
-              const userEmail = cleanUserEmail(r.driver.email, r.id);
-              if (userEmail) {
-                const existing = userMap.get(userEmail);
-                const status = r.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
-                  : r.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
-                  : (r.driver?.status || existing?.status || 'PENDING');
-
-                const rSubTime = new Date(r.driver?.submittedAt || r.created_at || 0).getTime();
-                const existingSubTime = new Date(existing?.submittedAt || 0).getTime();
-
-                // Select the NEWEST document photos: if Supabase row is newer and has photos, prefer Supabase photos!
-                const rHasPhotos = (r.driver?.idProofBase64 && r.driver.idProofBase64.length > 50) ||
-                                   (r.driver?.drivingLicenseBase64 && r.driver.drivingLicenseBase64.length > 50);
-                const existingHasPhotos = (existing?.idProofBase64 && existing.idProofBase64.length > 50) ||
-                                          (existing?.drivingLicenseBase64 && existing.drivingLicenseBase64.length > 50);
-
-                let resolvedIdProof = '';
-                let resolvedIdProofName = 'Identity Document';
-                let resolvedDl = '';
-                let resolvedDlName = 'Driving License';
-
-                if (rHasPhotos && (!existingHasPhotos || rSubTime >= existingSubTime)) {
-                  resolvedIdProof = r.driver?.idProofBase64 || existing?.idProofBase64 || '';
-                  resolvedIdProofName = r.driver?.idProofName || existing?.idProofName || 'Identity Document';
-                  resolvedDl = r.driver?.drivingLicenseBase64 || existing?.drivingLicenseBase64 || '';
-                  resolvedDlName = r.driver?.drivingLicenseName || existing?.drivingLicenseName || 'Driving License';
-                } else {
-                  resolvedIdProof = existing?.idProofBase64 || r.driver?.idProofBase64 || '';
-                  resolvedIdProofName = existing?.idProofName || r.driver?.idProofName || 'Identity Document';
-                  resolvedDl = existing?.drivingLicenseBase64 || r.driver?.drivingLicenseBase64 || '';
-                  resolvedDlName = existing?.drivingLicenseName || r.driver?.drivingLicenseName || 'Driving License';
-                }
-
-                const latestSubmittedAt = existingSubTime >= rSubTime
-                  ? (existing?.submittedAt || r.created_at)
-                  : (r.driver?.submittedAt || r.created_at);
-
-                // If user uploaded new documents after review, status is PENDING
-                const finalStatus = (existingSubTime > rSubTime && existing?.status) ? existing.status : status;
-
-                userMap.set(userEmail, {
-                  ...(existing || {}),
-                  ...r.driver,
-                  id: (rSubTime >= existingSubTime ? r.id : existing?.id) || r.driver.id || r.id,
-                  email: userEmail,
-                  status: finalStatus,
-                  rowId: r.id,
-                  idProofBase64: resolvedIdProof,
-                  idProofName: resolvedIdProofName,
-                  drivingLicenseBase64: resolvedDl,
-                  drivingLicenseName: resolvedDlName,
-                  submittedAt: latestSubmittedAt,
-                  reviewedAt: r.driver?.reviewedAt || existing?.reviewedAt || (finalStatus !== 'PENDING' ? r.updated_at : null),
-                  adminNotes: r.driver?.adminNotes || existing?.adminNotes || '',
-                });
+              const uEmail = cleanUserEmail(r.driver.email, r.id);
+              if (uEmail) {
+                if (!sbUserGroups.has(uEmail)) sbUserGroups.set(uEmail, []);
+                sbUserGroups.get(uEmail).push(r);
               }
+            }
+          });
+
+          sbUserGroups.forEach((rows, uEmail) => {
+            // Sort rows for this user by submission timestamp: newest first
+            rows.sort((a, b) => getDocumentSubmissionTimestamp(b) - getDocumentSubmissionTimestamp(a));
+            const existing = userMap.get(uEmail);
+
+            // Find newest row that has document photos
+            const newestRowWithPhotos = rows.find(
+              (r) => (r.driver?.idProofBase64 && r.driver.idProofBase64.length > 50) ||
+                     (r.driver?.drivingLicenseBase64 && r.driver.drivingLicenseBase64.length > 50)
+            ) || rows[0];
+
+            const sbSubTime = getDocumentSubmissionTimestamp(newestRowWithPhotos);
+            const existingSubTime = getDocumentSubmissionTimestamp(existing);
+
+            // Only update if Supabase has a newer submission than existing API data, OR if not present in API
+            if (!existing || sbSubTime > existingSubTime) {
+              const rStatus = newestRowWithPhotos.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
+                : newestRowWithPhotos.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
+                : (newestRowWithPhotos.driver?.status || 'PENDING');
+
+              userMap.set(uEmail, {
+                ...(existing || {}),
+                ...newestRowWithPhotos.driver,
+                id: newestRowWithPhotos.driver?.id || newestRowWithPhotos.id || existing?.id,
+                email: uEmail,
+                status: rStatus,
+                rowId: newestRowWithPhotos.id,
+                idProofBase64: newestRowWithPhotos.driver?.idProofBase64 || existing?.idProofBase64 || '',
+                idProofName: newestRowWithPhotos.driver?.idProofName || existing?.idProofName || 'Identity Document',
+                drivingLicenseBase64: newestRowWithPhotos.driver?.drivingLicenseBase64 || existing?.drivingLicenseBase64 || '',
+                drivingLicenseName: newestRowWithPhotos.driver?.drivingLicenseName || existing?.drivingLicenseName || 'Driving License',
+                submittedAt: newestRowWithPhotos.driver?.submittedAt || newestRowWithPhotos.created_at,
+                reviewedAt: newestRowWithPhotos.driver?.reviewedAt || (rStatus !== 'PENDING' ? newestRowWithPhotos.updated_at : null),
+                adminNotes: newestRowWithPhotos.driver?.adminNotes || '',
+              });
             }
           });
         }
@@ -264,7 +260,7 @@ function AdminContent() {
       }
 
       const list = Array.from(userMap.values());
-      const sorted = list.sort((a, b) => getRowTimestamp(b) - getRowTimestamp(a));
+      const sorted = list.sort((a, b) => getDocumentSubmissionTimestamp(b) - getDocumentSubmissionTimestamp(a));
       setVerifications(sorted);
     } catch (err) {
       console.error('Failed to fetch verifications:', err);
@@ -357,9 +353,9 @@ function AdminContent() {
         console.error('Supabase admin review insert error:', sbErr);
       }
 
-      // 2. Also call API route
+      // 2. Also call API route with normalized email
       try {
-        await fetch('/api/verification/' + encodeURIComponent(item?.id || normEmail) + '/review', {
+        await fetch('/api/verification/' + encodeURIComponent(normEmail) + '/review', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action, adminNotes: note }),
