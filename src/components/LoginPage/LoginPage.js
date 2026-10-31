@@ -30,6 +30,7 @@ export default function LoginPage({ onComplete }) {
   const [checkingStatus, setCheckingStatus] = useState(false);
   const [approvingQuick, setApprovingQuick] = useState(false);
   const [previewDocModal, setPreviewDocModal] = useState(null);
+  const [statusPopup, setStatusPopup] = useState(null);
 
   const idProofRef = useRef(null);
   const licenseRef = useRef(null);
@@ -289,9 +290,17 @@ export default function LoginPage({ onComplete }) {
       if (data.success && data.verification) {
         setVerificationRecord(data.verification);
         if (data.verification.status === 'APPROVED') {
-          // Instantly dispatch real OTP and automatically redirect to Step 3 (Email OTP page)
-          await requestOtpDispatch();
-          setStep(3);
+          setStatusPopup({
+            type: 'ACCEPTED',
+            title: 'Document Accepted',
+            message: 'Your documents have been verified and accepted successfully!',
+          });
+        } else if (data.verification.status === 'REJECTED') {
+          setStatusPopup({
+            type: 'REJECTED',
+            title: 'Document Rejected',
+            message: data.verification.adminNotes || 'Invalid documents try with Original documents',
+          });
         }
       }
     } catch (err) {
@@ -311,10 +320,20 @@ export default function LoginPage({ onComplete }) {
         const res = await fetch(`/api/verification?email=${encodeURIComponent(formData.email.trim())}`);
         const data = await res.json();
         if (data.success && data.verification) {
-          setVerificationRecord(data.verification);
           if (data.verification.status === 'APPROVED') {
-            await requestOtpDispatch();
-            setStep(3);
+            setVerificationRecord(data.verification);
+            setStatusPopup({
+              type: 'ACCEPTED',
+              title: 'Document Accepted',
+              message: 'Your documents have been verified and accepted successfully!',
+            });
+          } else if (data.verification.status === 'REJECTED') {
+            setVerificationRecord(data.verification);
+            setStatusPopup({
+              type: 'REJECTED',
+              title: 'Document Rejected',
+              message: data.verification.adminNotes || 'Invalid documents try with Original documents',
+            });
           }
         }
       } catch (err) {}
@@ -1093,6 +1112,134 @@ export default function LoginPage({ onComplete }) {
                 Close Preview
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Document Acceptance / Rejection Status Popup Modal */}
+      {statusPopup && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.72)',
+            backdropFilter: 'blur(5px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+            padding: '20px',
+          }}
+          onClick={() => {
+            if (statusPopup.type === 'REJECTED') setStatusPopup(null);
+          }}
+        >
+          <div
+            style={{
+              background: '#ffffff',
+              borderRadius: '20px',
+              maxWidth: '440px',
+              width: '100%',
+              padding: '28px 24px',
+              boxShadow: '0 25px 60px -15px rgba(0, 0, 0, 0.3)',
+              textAlign: 'center',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '16px',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {statusPopup.type === 'ACCEPTED' ? (
+              <>
+                <div
+                  style={{
+                    width: '68px',
+                    height: '68px',
+                    borderRadius: '50%',
+                    background: '#ecfdf5',
+                    border: '2px solid #10b981',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#059669',
+                  }}
+                >
+                  <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 style={{ margin: '0 0 8px', fontSize: '1.35rem', fontWeight: 700, color: '#065f46' }}>
+                    Document Accepted
+                  </h3>
+                  <p style={{ margin: 0, fontSize: '0.92rem', color: '#334155', lineHeight: 1.5 }}>
+                    {statusPopup.message}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className={styles.primaryBtn}
+                  style={{ width: '100%', marginTop: '8px', padding: '12px 20px', fontSize: '0.98rem', fontWeight: 600, background: '#059669', borderColor: '#059669' }}
+                  onClick={async () => {
+                    setStatusPopup(null);
+                    await requestOtpDispatch();
+                    setStep(3);
+                  }}
+                >
+                  Proceed to Email OTP
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="9 18 15 12 9 6" />
+                  </svg>
+                </button>
+              </>
+            ) : (
+              <>
+                <div
+                  style={{
+                    width: '68px',
+                    height: '68px',
+                    borderRadius: '50%',
+                    background: '#fef2f2',
+                    border: '2px solid #ef4444',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#dc2626',
+                  }}
+                >
+                  <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="15" y1="9" x2="9" y2="15" />
+                    <line x1="9" y1="9" x2="15" y2="15" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 style={{ margin: '0 0 8px', fontSize: '1.35rem', fontWeight: 700, color: '#991b1b' }}>
+                    Document Rejected
+                  </h3>
+                  <div style={{ background: '#fff1f2', border: '1px solid #fecdd3', borderRadius: '10px', padding: '10px 14px', marginBottom: '8px', fontSize: '0.9rem', color: '#9f1239', fontWeight: 500 }}>
+                    {statusPopup.message}
+                  </div>
+                  <p style={{ margin: 0, fontSize: '0.85rem', color: '#64748b' }}>
+                    Please re-upload authentic, clear document proofs above and re-submit.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className={styles.primaryBtn}
+                  style={{ width: '100%', marginTop: '8px', padding: '12px 20px', fontSize: '0.95rem', fontWeight: 600, background: '#dc2626', borderColor: '#dc2626' }}
+                  onClick={() => {
+                    setStatusPopup(null);
+                  }}
+                >
+                  Re-upload Documents
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
