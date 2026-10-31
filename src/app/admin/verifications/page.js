@@ -30,6 +30,7 @@ function formatDocSrc(raw, fallbackType = 'image/jpeg') {
   const trimmed = raw.trim();
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed;
   if (trimmed.startsWith('data:')) return trimmed;
+  if (trimmed.length < 50) return '';
   if (trimmed.startsWith('JVBERi')) return `data:application/pdf;base64,${trimmed}`;
   if (trimmed.startsWith('iVBORw')) return `data:image/png;base64,${trimmed}`;
   if (trimmed.startsWith('/9j/')) return `data:image/jpeg;base64,${trimmed}`;
@@ -151,7 +152,7 @@ function AdminContent() {
   const fetchVerifications = useCallback(async (silent = false) => {
     try {
       if (!silent) setLoading(true);
-      const emailMap = new Map();
+      const subMap = new Map();
 
       // 1. Fetch from authoritative API route first (has local persistence + photos)
       try {
@@ -160,8 +161,9 @@ function AdminContent() {
           const data = await res.json();
           if (data.success && data.verifications && Array.isArray(data.verifications)) {
             data.verifications.forEach((v) => {
-              if (v && v.email) {
-                emailMap.set(v.email.toLowerCase().trim(), v);
+              if (v && (v.id || v.email)) {
+                const subId = v.id || v.email.toLowerCase().trim();
+                subMap.set(subId, { ...v, id: subId });
               }
             });
           }
@@ -185,64 +187,46 @@ function AdminContent() {
         const { data: rideRows } = await Promise.race([queryPromise, timeoutPromise]);
 
         if (rideRows && rideRows.length > 0) {
-          const groups = new Map();
           rideRows.forEach((r) => {
             if (r.driver && (r.driver.type === 'DOC_VERIFICATION' || r.driver.email)) {
-              const userEmail = (r.driver.email || '').toLowerCase().trim();
-              if (userEmail) {
-                if (!groups.has(userEmail)) groups.set(userEmail, []);
-                groups.get(userEmail).push(r);
-              }
+              const recId = r.driver.id || r.id;
+              const existing = subMap.get(recId);
+              const status = r.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
+                : r.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
+                : (r.driver?.status || existing?.status || 'PENDING');
+
+              const resolvedIdProof = r.driver?.idProofBase64 || existing?.idProofBase64 || '';
+              const resolvedIdProofName = r.driver?.idProofName || existing?.idProofName || 'Identity Document';
+              const resolvedDl = r.driver?.drivingLicenseBase64 || existing?.drivingLicenseBase64 || '';
+              const resolvedDlName = r.driver?.drivingLicenseName || existing?.drivingLicenseName || 'Driving License';
+
+              subMap.set(recId, {
+                ...(existing || {}),
+                ...r.driver,
+                id: recId,
+                status,
+                rowId: r.id,
+                idProofBase64: resolvedIdProof,
+                idProofName: resolvedIdProofName,
+                drivingLicenseBase64: resolvedDl,
+                drivingLicenseName: resolvedDlName,
+                submittedAt: r.driver?.submittedAt || existing?.submittedAt || r.created_at,
+                reviewedAt: r.driver?.reviewedAt || existing?.reviewedAt || (status !== 'PENDING' ? r.updated_at : null),
+                adminNotes: r.driver?.adminNotes || existing?.adminNotes || '',
+              });
             }
-          });
-
-          groups.forEach((userRows, userEmail) => {
-            userRows.sort((a, b) => getRowTimestamp(b) - getRowTimestamp(a));
-            const latest = userRows[0];
-            const photoRow = userRows.find(
-              (r) => (r.driver?.idProofBase64 && r.driver.idProofBase64.length > 50) || (r.driver?.drivingLicenseBase64 && r.driver.drivingLicenseBase64.length > 50)
-            ) || latest;
-
-            const idRow = userRows.find((r) => r.driver?.idProofBase64 && r.driver.idProofBase64.length > 50) || photoRow;
-            const dlRow = userRows.find((r) => r.driver?.drivingLicenseBase64 && r.driver.drivingLicenseBase64.length > 50) || photoRow;
-
-            const existing = emailMap.get(userEmail);
-            const status = latest.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
-              : latest.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
-              : (latest.driver?.status || existing?.status || 'PENDING');
-
-            const resolvedIdProof = idRow?.driver?.idProofBase64 || photoRow?.driver?.idProofBase64 || existing?.idProofBase64 || '';
-            const resolvedIdProofName = idRow?.driver?.idProofName || photoRow?.driver?.idProofName || existing?.idProofName || 'Identity Document';
-            const resolvedDl = dlRow?.driver?.drivingLicenseBase64 || photoRow?.driver?.drivingLicenseBase64 || existing?.drivingLicenseBase64 || '';
-            const resolvedDlName = dlRow?.driver?.drivingLicenseName || photoRow?.driver?.drivingLicenseName || existing?.drivingLicenseName || 'Driving License';
-
-            emailMap.set(userEmail, {
-              ...(existing || {}),
-              ...photoRow.driver,
-              ...latest.driver,
-              id: latest.driver?.id || latest.id || existing?.id,
-              status,
-              rowId: latest.id,
-              idProofBase64: resolvedIdProof,
-              idProofName: resolvedIdProofName,
-              drivingLicenseBase64: resolvedDl,
-              drivingLicenseName: resolvedDlName,
-              submittedAt: latest.driver?.submittedAt || photoRow.driver?.submittedAt || existing?.submittedAt || new Date(getRowTimestamp(photoRow)).toISOString(),
-              reviewedAt: latest.driver?.reviewedAt || existing?.reviewedAt || (status !== 'PENDING' ? new Date(getRowTimestamp(latest)).toISOString() : null),
-              adminNotes: latest.driver?.adminNotes || existing?.adminNotes || '',
-            });
           });
         }
       } catch (sbErr) {
-        // Supabase error or timeout; backend API data in emailMap is retained
+        // Supabase error or timeout; backend API data in subMap is retained
       }
 
-      const list = Array.from(emailMap.values());
+      const list = Array.from(subMap.values());
       setVerifications(
         list.sort(
           (a, b) =>
-            new Date(b.reviewedAt || b.submittedAt || 0) -
-            new Date(a.reviewedAt || a.submittedAt || 0)
+            new Date(b.submittedAt || b.reviewedAt || 0) -
+            new Date(a.submittedAt || a.reviewedAt || 0)
         )
       );
     } catch (err) {

@@ -13,7 +13,7 @@ export async function OPTIONS() {
 export async function POST(req) {
   try {
     const body = await req.json();
-    const { email, fullName, phone, idProofBase64, idProofName, drivingLicenseBase64, drivingLicenseName } = body;
+    const { id, email, fullName, phone, idProofBase64, idProofName, drivingLicenseBase64, drivingLicenseName } = body;
 
     if (!email || !fullName) {
       return Response.json(
@@ -33,6 +33,7 @@ export async function POST(req) {
     }
 
     const verificationRecord = await dbCreateDocumentVerification({
+      id,
       email,
       fullName,
       phone,

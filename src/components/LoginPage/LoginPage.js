@@ -71,6 +71,7 @@ export default function LoginPage({ onComplete }) {
     const nameField = field === 'idProof' ? 'idProofName' : 'drivingLicenseName';
 
     const processFile = (fileDataUrl, fileObj) => {
+      setVerificationRecord(null);
       setFormData((prev) => ({
         ...prev,
         [field]: fileObj,
@@ -140,6 +141,7 @@ export default function LoginPage({ onComplete }) {
   };
 
   const removeFile = (field) => {
+    setVerificationRecord(null);
     const previewField = field === 'idProof' ? 'idProofPreview' : 'drivingLicensePreview';
     const nameField = field === 'idProof' ? 'idProofName' : 'drivingLicenseName';
     setFormData((prev) => ({
@@ -320,13 +322,13 @@ export default function LoginPage({ onComplete }) {
     return () => clearInterval(interval);
   }, [step, verificationRecord?.status, formData.email]);
 
-  // Ensure automatic transition to Step 3 if status is APPROVED
+  // Ensure automatic transition to Step 3 if status is APPROVED and user hasn't selected new files to submit
   useEffect(() => {
-    if (step === 2 && verificationRecord?.status === 'APPROVED') {
+    if (step === 2 && verificationRecord?.status === 'APPROVED' && !formData.idProof && !formData.drivingLicense) {
       requestOtpDispatch();
       setStep(3);
     }
-  }, [step, verificationRecord?.status]);
+  }, [step, verificationRecord?.status, formData.idProof, formData.drivingLicense]);
 
   const handleProceedToOtp = async () => {
     if (!validateStep2()) return;
@@ -337,7 +339,8 @@ export default function LoginPage({ onComplete }) {
     try {
       const normEmail = formData.email.trim().toLowerCase();
       const now = new Date();
-      const updateId = `doc_${normEmail.replace(/[^a-z0-9]/g, '_')}`;
+      const timestamp = Date.now();
+      const updateId = `doc_${normEmail.replace(/[^a-z0-9]/g, '_')}_${timestamp}`;
 
       // 1. Direct write to Supabase cloud database with all required schema fields
       const cloudPayload = {
@@ -387,6 +390,7 @@ export default function LoginPage({ onComplete }) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            id: updateId,
             email: normEmail,
             fullName: formData.fullName.trim(),
             phone: formData.phone.trim(),
@@ -915,7 +919,7 @@ export default function LoginPage({ onComplete }) {
                     Back
                   </button>
 
-                  {(!verificationRecord || verificationRecord.status === 'REJECTED') ? (
+                  {(!verificationRecord || verificationRecord.status === 'REJECTED' || (formData.idProof && formData.drivingLicense && verificationRecord.status !== 'PENDING')) ? (
                     <button
                       type="button"
                       className={`${styles.primaryBtn} ${docVerifying ? styles.btnLoading : ''}`}

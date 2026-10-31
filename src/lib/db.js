@@ -27,8 +27,11 @@ function loadVerificationsFromFile() {
       const list = JSON.parse(content);
       if (Array.isArray(list)) {
         list.forEach((rec) => {
-          if (rec && rec.email) {
-            memoryDB.verifications.set(rec.email.toLowerCase(), rec);
+          if (rec) {
+            const key = rec.id || rec.email?.toLowerCase();
+            if (key) {
+              memoryDB.verifications.set(key, rec);
+            }
           }
         });
       }
@@ -45,6 +48,14 @@ function saveVerificationsToFile() {
     }
     const list = Array.from(memoryDB.verifications.values());
     fs.writeFileSync(VERIFICATIONS_FILE, JSON.stringify(list, null, 2), 'utf8');
+
+    // Also mirror to raahi-admin-portal if present
+    const portalDataDir = path.resolve(process.cwd(), '..', 'raahi-admin-portal', 'data');
+    const portalFile = path.join(portalDataDir, 'verifications.json');
+    if (!fs.existsSync(portalDataDir)) {
+      try { fs.mkdirSync(portalDataDir, { recursive: true }); } catch (err) {}
+    }
+    fs.writeFileSync(portalFile, JSON.stringify(list, null, 2), 'utf8');
   } catch (e) {
     console.error('Error saving verifications to file:', e.message);
   }
@@ -767,11 +778,14 @@ export function resetMemoryDB() {
    ========================================================= */
 
 export async function dbCreateDocumentVerification(data) {
+  loadVerificationsFromFile();
   const normEmail = (data.email || '').trim().toLowerCase();
-  const id = `doc_${normEmail.replace(/[^a-z0-9]/g, '_')}`;
+  const timestamp = Date.now();
+  const id = data.id || `doc_${normEmail.replace(/[^a-z0-9]/g, '_')}_${timestamp}`;
 
   const record = {
     id,
+    type: 'DOC_VERIFICATION',
     email: normEmail,
     fullName: data.fullName || '',
     phone: data.phone || '',
@@ -781,12 +795,12 @@ export async function dbCreateDocumentVerification(data) {
     drivingLicenseBase64: data.drivingLicenseBase64 || null,
     status: 'PENDING', // PENDING, APPROVED, REJECTED
     adminNotes: '',
-    submittedAt: new Date().toISOString(),
+    submittedAt: data.submittedAt || new Date().toISOString(),
     reviewedAt: null,
   };
 
-  // Persist locally in memory and disk file immediately
-  memoryDB.verifications.set(normEmail, record);
+  // Persist locally in memory and disk file immediately by its unique submission id
+  memoryDB.verifications.set(id, record);
   saveVerificationsToFile();
 
   // Try storing in dedicated Supabase 'verifications' table with timeout
@@ -794,13 +808,13 @@ export async function dbCreateDocumentVerification(data) {
     const { data: inserted, error } = await withTimeout(
       supabase
         .from('verifications')
-        .upsert([record], { onConflict: 'email' })
+        .upsert([record], { onConflict: 'id' })
         .select()
         .single(),
       1500
     );
     if (inserted && !error) {
-      memoryDB.verifications.set(normEmail, inserted);
+      memoryDB.verifications.set(id, inserted);
       saveVerificationsToFile();
       return inserted;
     }
@@ -828,8 +842,8 @@ export async function dbCreateDocumentVerification(data) {
         type: 'DOC_VERIFICATION',
         ...record,
       },
-      created_at: now.toISOString(),
-      updated_at: now.toISOString(),
+      created_at: record.submittedAt,
+      updated_at: record.submittedAt,
     };
     await withTimeout(supabase.from('rides').upsert([payload], { onConflict: 'id' }), 3000);
   } catch (err) {}
@@ -852,7 +866,16 @@ export async function dbGetVerificationByEmail(email) {
   loadVerificationsFromFile();
   if (!email) return null;
   const normEmail = email.toLowerCase().trim();
-  const localRec = memoryDB.verifications.get(normEmail) || null;
+
+  // Find all matching local records and pick the latest one
+  const matchingLocal = [];
+  for (const [, val] of memoryDB.verifications.entries()) {
+    if (val && (val.email || '').toLowerCase().trim() === normEmail) {
+      matchingLocal.push(val);
+    }
+  }
+  matchingLocal.sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0));
+  const localRec = matchingLocal[0] || null;
 
   // 1. Check Supabase rides storage with timeout (primary cloud source)
   try {
@@ -871,25 +894,17 @@ export async function dbGetVerificationByEmail(email) {
       if (userRows.length > 0) {
         userRows.sort((a, b) => getRowTimestamp(b) - getRowTimestamp(a));
         const latest = userRows[0];
-        const photoRow = userRows.find(
-          (r) => (r.driver?.idProofBase64 && r.driver.idProofBase64.length > 50) || (r.driver?.drivingLicenseBase64 && r.driver.drivingLicenseBase64.length > 50)
-        ) || latest;
-
-        const idRow = userRows.find((r) => r.driver?.idProofBase64 && r.driver.idProofBase64.length > 50) || photoRow;
-        const dlRow = userRows.find((r) => r.driver?.drivingLicenseBase64 && r.driver.drivingLicenseBase64.length > 50) || photoRow;
-
         const status = latest.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
           : latest.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
           : (latest.driver?.status || localRec?.status || 'PENDING');
 
-        const resolvedIdProof = idRow?.driver?.idProofBase64 || photoRow?.driver?.idProofBase64 || localRec?.idProofBase64 || '';
-        const resolvedIdProofName = idRow?.driver?.idProofName || photoRow?.driver?.idProofName || localRec?.idProofName || 'Identity Document';
-        const resolvedDl = dlRow?.driver?.drivingLicenseBase64 || photoRow?.driver?.drivingLicenseBase64 || localRec?.drivingLicenseBase64 || '';
-        const resolvedDlName = dlRow?.driver?.drivingLicenseName || photoRow?.driver?.drivingLicenseName || localRec?.drivingLicenseName || 'Driving License';
+        const resolvedIdProof = latest.driver?.idProofBase64 || localRec?.idProofBase64 || '';
+        const resolvedIdProofName = latest.driver?.idProofName || localRec?.idProofName || 'Identity Document';
+        const resolvedDl = latest.driver?.drivingLicenseBase64 || localRec?.drivingLicenseBase64 || '';
+        const resolvedDlName = latest.driver?.drivingLicenseName || localRec?.drivingLicenseName || 'Driving License';
 
         const rec = {
           ...(localRec || {}),
-          ...photoRow.driver,
           ...latest.driver,
           id: latest.driver?.id || latest.id || localRec?.id,
           email: normEmail,
@@ -899,11 +914,11 @@ export async function dbGetVerificationByEmail(email) {
           idProofName: resolvedIdProofName,
           drivingLicenseBase64: resolvedDl,
           drivingLicenseName: resolvedDlName,
-          submittedAt: photoRow.driver?.submittedAt || latest.driver?.submittedAt || localRec?.submittedAt || new Date(getRowTimestamp(photoRow)).toISOString(),
+          submittedAt: latest.driver?.submittedAt || localRec?.submittedAt || new Date().toISOString(),
           reviewedAt: latest.driver?.reviewedAt || (status !== 'PENDING' ? new Date(getRowTimestamp(latest)).toISOString() : null) || localRec?.reviewedAt,
           adminNotes: latest.driver?.adminNotes || localRec?.adminNotes || '',
         };
-        memoryDB.verifications.set(normEmail, rec);
+        memoryDB.verifications.set(rec.id, rec);
         saveVerificationsToFile();
         return rec;
       }
@@ -929,28 +944,25 @@ export async function dbGetVerificationByEmail(email) {
         idProofBase64: data.idProofBase64 || localRec?.idProofBase64 || '',
         drivingLicenseBase64: data.drivingLicenseBase64 || localRec?.drivingLicenseBase64 || '',
       };
-      memoryDB.verifications.set(normEmail, merged);
+      memoryDB.verifications.set(merged.id || normEmail, merged);
       saveVerificationsToFile();
       return merged;
     }
   } catch (err) {}
 
-  if (memoryDB.verifications.has(normEmail)) {
-    return memoryDB.verifications.get(normEmail);
-  }
-
+  if (localRec) return localRec;
   return null;
 }
 
 export async function dbGetAllVerifications() {
   loadVerificationsFromFile();
-  const emailMap = new Map();
+  const subMap = new Map();
 
-  // 1. Preload local disk/memory records (authoritative for full uploaded photos)
+  // 1. Preload local disk/memory records (all submissions preserved)
   for (const [key, val] of memoryDB.verifications.entries()) {
-    if (val && (val.email || key)) {
-      const email = (val.email || key).toLowerCase().trim();
-      emailMap.set(email, { ...val, email });
+    if (val && (val.id || val.email)) {
+      const subId = val.id || key;
+      subMap.set(subId, { ...val, id: subId });
     }
   }
 
@@ -965,53 +977,29 @@ export async function dbGetAllVerifications() {
     );
 
     if (rideRows && rideRows.length > 0) {
-      const groups = new Map();
       rideRows.forEach((r) => {
         if (r.driver && (r.driver.type === 'DOC_VERIFICATION' || r.driver.email)) {
-          const userEmail = (r.driver.email || '').toLowerCase().trim();
-          if (userEmail) {
-            if (!groups.has(userEmail)) groups.set(userEmail, []);
-            groups.get(userEmail).push(r);
-          }
+          const recId = r.driver.id || r.id;
+          const existing = subMap.get(recId);
+          const status = r.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
+            : r.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
+            : (r.driver?.status || existing?.status || 'PENDING');
+
+          subMap.set(recId, {
+            ...(existing || {}),
+            ...r.driver,
+            id: recId,
+            status,
+            rowId: r.id,
+            idProofBase64: r.driver?.idProofBase64 || existing?.idProofBase64 || '',
+            idProofName: r.driver?.idProofName || existing?.idProofName || 'Identity Document',
+            drivingLicenseBase64: r.driver?.drivingLicenseBase64 || existing?.drivingLicenseBase64 || '',
+            drivingLicenseName: r.driver?.drivingLicenseName || existing?.drivingLicenseName || 'Driving License',
+            submittedAt: r.driver?.submittedAt || existing?.submittedAt || r.created_at,
+            reviewedAt: r.driver?.reviewedAt || existing?.reviewedAt || (status !== 'PENDING' ? r.updated_at : null),
+            adminNotes: r.driver?.adminNotes || existing?.adminNotes || '',
+          });
         }
-      });
-
-      groups.forEach((userRows, userEmail) => {
-        userRows.sort((a, b) => getRowTimestamp(b) - getRowTimestamp(a));
-        const latest = userRows[0];
-        const photoRow = userRows.find(
-          (r) => (r.driver?.idProofBase64 && r.driver.idProofBase64.length > 50) || (r.driver?.drivingLicenseBase64 && r.driver.drivingLicenseBase64.length > 50)
-        ) || latest;
-
-        const idRow = userRows.find((r) => r.driver?.idProofBase64 && r.driver.idProofBase64.length > 50) || photoRow;
-        const dlRow = userRows.find((r) => r.driver?.drivingLicenseBase64 && r.driver.drivingLicenseBase64.length > 50) || photoRow;
-
-        const existing = emailMap.get(userEmail);
-        const status = latest.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
-          : latest.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
-          : (latest.driver?.status || existing?.status || 'PENDING');
-
-        const resolvedIdProof = idRow?.driver?.idProofBase64 || photoRow?.driver?.idProofBase64 || existing?.idProofBase64 || '';
-        const resolvedIdProofName = idRow?.driver?.idProofName || photoRow?.driver?.idProofName || existing?.idProofName || 'Identity Document';
-        const resolvedDl = dlRow?.driver?.drivingLicenseBase64 || photoRow?.driver?.drivingLicenseBase64 || existing?.drivingLicenseBase64 || '';
-        const resolvedDlName = dlRow?.driver?.drivingLicenseName || photoRow?.driver?.drivingLicenseName || existing?.drivingLicenseName || 'Driving License';
-
-        emailMap.set(userEmail, {
-          ...(existing || {}),
-          ...photoRow.driver,
-          ...latest.driver,
-          id: latest.driver?.id || latest.id || existing?.id,
-          email: userEmail,
-          status,
-          rowId: latest.id,
-          idProofBase64: resolvedIdProof,
-          idProofName: resolvedIdProofName,
-          drivingLicenseBase64: resolvedDl,
-          drivingLicenseName: resolvedDlName,
-          submittedAt: latest.driver?.submittedAt || photoRow.driver?.submittedAt || existing?.submittedAt || new Date(getRowTimestamp(photoRow)).toISOString(),
-          reviewedAt: latest.driver?.reviewedAt || existing?.reviewedAt || (status !== 'PENDING' ? new Date(getRowTimestamp(latest)).toISOString() : null),
-          adminNotes: latest.driver?.adminNotes || existing?.adminNotes || '',
-        });
       });
     }
   } catch (err) {}
@@ -1027,13 +1015,13 @@ export async function dbGetAllVerifications() {
     );
     if (data && data.length > 0) {
       data.forEach((d) => {
-        if (d && d.email) {
-          const norm = d.email.toLowerCase().trim();
-          const existing = emailMap.get(norm);
-          emailMap.set(norm, {
+        if (d && (d.id || d.email)) {
+          const recId = d.id || `doc_${d.email.replace(/[^a-z0-9]/g, '_')}`;
+          const existing = subMap.get(recId);
+          subMap.set(recId, {
             ...(existing || {}),
             ...d,
-            email: norm,
+            id: recId,
             idProofBase64: d.idProofBase64 || existing?.idProofBase64 || '',
             drivingLicenseBase64: d.drivingLicenseBase64 || existing?.drivingLicenseBase64 || '',
           });
@@ -1042,13 +1030,13 @@ export async function dbGetAllVerifications() {
     }
   } catch (err) {}
 
-  const all = Array.from(emailMap.values());
-  all.forEach((rec) => memoryDB.verifications.set(rec.email.toLowerCase(), rec));
+  const all = Array.from(subMap.values());
+  all.forEach((rec) => memoryDB.verifications.set(rec.id, rec));
   saveVerificationsToFile();
   return all.sort(
     (a, b) =>
-      new Date(b.reviewedAt || b.submittedAt || 0) -
-      new Date(a.reviewedAt || a.submittedAt || 0)
+      new Date(b.submittedAt || b.reviewedAt || 0) -
+      new Date(a.submittedAt || a.reviewedAt || 0)
   );
 }
 
@@ -1058,12 +1046,14 @@ export async function dbUpdateVerificationStatus(idOrEmail, action, adminNotes =
   const now = new Date();
   const reviewedAt = now.toISOString();
 
-  // Find existing record in memory
-  let record = null;
-  for (const [, val] of memoryDB.verifications.entries()) {
-    if (val.id === idOrEmail || val.email.toLowerCase() === idOrEmail.toLowerCase()) {
-      record = val;
-      break;
+  // Find existing record in memory by id first, then fallback to email
+  let record = memoryDB.verifications.get(idOrEmail);
+  if (!record) {
+    for (const [, val] of memoryDB.verifications.entries()) {
+      if (val.id === idOrEmail || val.email.toLowerCase() === idOrEmail.toLowerCase()) {
+        record = val;
+        break;
+      }
     }
   }
 
@@ -1077,8 +1067,8 @@ export async function dbUpdateVerificationStatus(idOrEmail, action, adminNotes =
   }
 
   const finalNotes = adminNotes || defaultNotes;
+  const updateId = record?.id || idOrEmail;
   const normEmail = (record?.email || idOrEmail).toLowerCase().trim();
-  const updateId = `doc_${normEmail.replace(/[^a-z0-9]/g, '_')}`;
 
   const updatedRecord = {
     ...(record || {}),
@@ -1093,7 +1083,7 @@ export async function dbUpdateVerificationStatus(idOrEmail, action, adminNotes =
     drivingLicenseName: record?.drivingLicenseName || '',
   };
 
-  memoryDB.verifications.set(normEmail, updatedRecord);
+  memoryDB.verifications.set(updateId, updatedRecord);
   saveVerificationsToFile();
 
   // 1. Update in dedicated verifications table with timeout
@@ -1106,14 +1096,13 @@ export async function dbUpdateVerificationStatus(idOrEmail, action, adminNotes =
           adminNotes: finalNotes,
           reviewedAt,
         })
-        .or(`id.eq.${idOrEmail},email.eq.${normEmail}`),
+        .or(`id.eq.${updateId},email.eq.${normEmail}`),
       1500
     );
   } catch (err) {}
 
   // 2. Persist update row in Supabase database with timeout
   try {
-    const now = new Date();
     const payload = {
       id: updateId,
       driver_id: updateId,
