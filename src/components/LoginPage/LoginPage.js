@@ -278,7 +278,9 @@ export default function LoginPage({ onComplete }) {
     if (!formData.email) return;
     setCheckingStatus(true);
     try {
-      const res = await fetch(`/api/verification?email=${encodeURIComponent(formData.email.trim())}`);
+      const res = await fetch(`/api/verifications?email=${encodeURIComponent(formData.email.trim())}&t=${Date.now()}`, {
+        cache: 'no-store',
+      });
       const data = await res.json();
       if (data.success && data.verification) {
         setVerificationRecord(data.verification);
@@ -310,7 +312,9 @@ export default function LoginPage({ onComplete }) {
     }
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/verification?email=${encodeURIComponent(formData.email.trim())}`);
+        const res = await fetch(`/api/verifications?email=${encodeURIComponent(formData.email.trim())}&t=${Date.now()}`, {
+          cache: 'no-store',
+        });
         const data = await res.json();
         if (data.success && data.verification) {
           if (data.verification.status === 'APPROVED') {

@@ -150,7 +150,10 @@ function AdminContent() {
     if (!silent) setLoading(true);
 
     try {
-      const res = await fetch('/api/verifications');
+      const res = await fetch(`/api/verifications?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache, no-store' },
+      });
       if (!res.ok) {
         throw new Error(`HTTP error ${res.status}`);
       }
@@ -202,7 +205,10 @@ function AdminContent() {
     setLoadingDocs((prev) => ({ ...prev, [loadKey]: true }));
 
     try {
-      const res = await fetch(`/api/verifications/${encodeURIComponent(item.id)}`);
+      const res = await fetch(`/api/verifications/${encodeURIComponent(item.id)}?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache, no-store' },
+      });
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       const data = await res.json();
       if (data.success && data.verification) {
