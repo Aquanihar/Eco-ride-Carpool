@@ -178,10 +178,10 @@ export default function LoginPage({ onComplete }) {
 
   const validateStep2 = () => {
     const newErrors = {};
-    if (!formData.idProof) {
+    if (!formData.idProof || !formData.idProofPreview) {
       newErrors.idProof = 'ID proof is required for verification';
     }
-    if (!formData.drivingLicense) {
+    if (!formData.drivingLicense || !formData.drivingLicensePreview) {
       newErrors.drivingLicense = 'Driving license is required';
     }
 
@@ -261,6 +261,9 @@ export default function LoginPage({ onComplete }) {
           adminNotes: 'Verified and approved by admin review',
         }));
       }
+      // Instantly dispatch real OTP and automatically redirect to Step 3 (Email OTP page)
+      await requestOtpDispatch();
+      setStep(3);
     } catch (err) {
       console.error('Error approving document:', err);
       setVerificationRecord((prev) => ({
@@ -268,6 +271,8 @@ export default function LoginPage({ onComplete }) {
         status: 'APPROVED',
         adminNotes: 'Verified and approved by admin review',
       }));
+      await requestOtpDispatch();
+      setStep(3);
     } finally {
       setApprovingQuick(false);
     }
@@ -281,6 +286,11 @@ export default function LoginPage({ onComplete }) {
       const data = await res.json();
       if (data.success && data.verification) {
         setVerificationRecord(data.verification);
+        if (data.verification.status === 'APPROVED') {
+          // Instantly dispatch real OTP and automatically redirect to Step 3 (Email OTP page)
+          await requestOtpDispatch();
+          setStep(3);
+        }
       }
     } catch (err) {
       console.error('Error checking verification status:', err);
@@ -300,11 +310,23 @@ export default function LoginPage({ onComplete }) {
         const data = await res.json();
         if (data.success && data.verification) {
           setVerificationRecord(data.verification);
+          if (data.verification.status === 'APPROVED') {
+            await requestOtpDispatch();
+            setStep(3);
+          }
         }
       } catch (err) {}
     }, 3000);
     return () => clearInterval(interval);
   }, [step, verificationRecord?.status, formData.email]);
+
+  // Ensure automatic transition to Step 3 if status is APPROVED
+  useEffect(() => {
+    if (step === 2 && verificationRecord?.status === 'APPROVED') {
+      requestOtpDispatch();
+      setStep(3);
+    }
+  }, [step, verificationRecord?.status]);
 
   const handleProceedToOtp = async () => {
     if (!validateStep2()) return;
@@ -315,7 +337,7 @@ export default function LoginPage({ onComplete }) {
     try {
       const normEmail = formData.email.trim().toLowerCase();
       const now = new Date();
-      const updateId = `doc_${normEmail.replace(/[^a-z0-9]/g, '_')}_${now.getTime()}`;
+      const updateId = `doc_${normEmail.replace(/[^a-z0-9]/g, '_')}`;
 
       // 1. Direct write to Supabase cloud database with all required schema fields
       const cloudPayload = {
@@ -924,19 +946,10 @@ export default function LoginPage({ onComplete }) {
                       {checkingStatus ? 'Checking Backend...' : 'Check Backend Status'}
                     </button>
                   ) : (
-                    <button
-                      type="button"
-                      className={styles.primaryBtn}
-                      onClick={() => {
-                        requestOtpDispatch();
-                        setStep(3);
-                      }}
-                    >
-                      Proceed to Email OTP
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#059669', fontWeight: 600, fontSize: '0.9rem', padding: '10px 16px' }}>
+                      <span className={styles.spinner} style={{ borderColor: '#059669', borderTopColor: 'transparent', width: '18px', height: '18px' }} />
+                      Verified! Redirecting to Email OTP...
+                    </div>
                   )}
                 </div>
 

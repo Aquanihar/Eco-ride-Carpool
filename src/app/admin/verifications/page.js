@@ -170,15 +170,17 @@ function AdminContent() {
         console.error('API verification fetch error:', apiErr);
       }
 
-      // 2. Also merge Supabase entries with a 3s safety timeout to avoid hanging
+      // 2. Also merge Supabase entries with a 12s safety timeout to avoid hanging
       try {
         const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Supabase request timeout')), 3000)
+          setTimeout(() => reject(new Error('Supabase request timeout')), 12000)
         );
         const queryPromise = supabase
           .from('rides')
           .select('*')
-          .ilike('status', 'VERIFICATION_%');
+          .ilike('status', 'VERIFICATION_%')
+          .order('created_at', { ascending: false })
+          .limit(50);
 
         const { data: rideRows } = await Promise.race([queryPromise, timeoutPromise]);
 
@@ -198,13 +200,21 @@ function AdminContent() {
             userRows.sort((a, b) => getRowTimestamp(b) - getRowTimestamp(a));
             const latest = userRows[0];
             const photoRow = userRows.find(
-              (r) => r.driver?.idProofBase64 || r.driver?.drivingLicenseBase64
+              (r) => (r.driver?.idProofBase64 && r.driver.idProofBase64.length > 50) || (r.driver?.drivingLicenseBase64 && r.driver.drivingLicenseBase64.length > 50)
             ) || latest;
+
+            const idRow = userRows.find((r) => r.driver?.idProofBase64 && r.driver.idProofBase64.length > 50) || photoRow;
+            const dlRow = userRows.find((r) => r.driver?.drivingLicenseBase64 && r.driver.drivingLicenseBase64.length > 50) || photoRow;
 
             const existing = emailMap.get(userEmail);
             const status = latest.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
               : latest.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
               : (latest.driver?.status || existing?.status || 'PENDING');
+
+            const resolvedIdProof = idRow?.driver?.idProofBase64 || photoRow?.driver?.idProofBase64 || existing?.idProofBase64 || '';
+            const resolvedIdProofName = idRow?.driver?.idProofName || photoRow?.driver?.idProofName || existing?.idProofName || 'Identity Document';
+            const resolvedDl = dlRow?.driver?.drivingLicenseBase64 || photoRow?.driver?.drivingLicenseBase64 || existing?.drivingLicenseBase64 || '';
+            const resolvedDlName = dlRow?.driver?.drivingLicenseName || photoRow?.driver?.drivingLicenseName || existing?.drivingLicenseName || 'Driving License';
 
             emailMap.set(userEmail, {
               ...(existing || {}),
@@ -213,10 +223,10 @@ function AdminContent() {
               id: latest.driver?.id || latest.id || existing?.id,
               status,
               rowId: latest.id,
-              idProofBase64: existing?.idProofBase64 || photoRow.driver?.idProofBase64 || latest.driver?.idProofBase64 || '',
-              idProofName: existing?.idProofName || photoRow.driver?.idProofName || latest.driver?.idProofName || 'Identity Document',
-              drivingLicenseBase64: existing?.drivingLicenseBase64 || photoRow.driver?.drivingLicenseBase64 || latest.driver?.drivingLicenseBase64 || '',
-              drivingLicenseName: existing?.drivingLicenseName || photoRow.driver?.drivingLicenseName || latest.driver?.drivingLicenseName || 'Driving License',
+              idProofBase64: resolvedIdProof,
+              idProofName: resolvedIdProofName,
+              drivingLicenseBase64: resolvedDl,
+              drivingLicenseName: resolvedDlName,
               submittedAt: latest.driver?.submittedAt || photoRow.driver?.submittedAt || existing?.submittedAt || new Date(getRowTimestamp(photoRow)).toISOString(),
               reviewedAt: latest.driver?.reviewedAt || existing?.reviewedAt || (status !== 'PENDING' ? new Date(getRowTimestamp(latest)).toISOString() : null),
               adminNotes: latest.driver?.adminNotes || existing?.adminNotes || '',
@@ -272,7 +282,7 @@ function AdminContent() {
 
     const item = verifications.find((v) => v.id === id || v.email === id);
     const normEmail = (item?.email || id).toLowerCase().trim();
-    const updateId = `doc_${normEmail.replace(/[^a-z0-9]/g, '_')}_${now.getTime()}`;
+    const updateId = `doc_${normEmail.replace(/[^a-z0-9]/g, '_')}`;
 
     // Optimistically update UI
     setVerifications((prev) =>

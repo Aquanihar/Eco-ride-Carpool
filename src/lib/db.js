@@ -768,8 +768,7 @@ export function resetMemoryDB() {
 
 export async function dbCreateDocumentVerification(data) {
   const normEmail = (data.email || '').trim().toLowerCase();
-  const timestamp = Date.now();
-  const id = `doc_${normEmail.replace(/[^a-z0-9]/g, '_')}_${timestamp}`;
+  const id = `doc_${normEmail.replace(/[^a-z0-9]/g, '_')}`;
 
   const record = {
     id,
@@ -873,12 +872,20 @@ export async function dbGetVerificationByEmail(email) {
         userRows.sort((a, b) => getRowTimestamp(b) - getRowTimestamp(a));
         const latest = userRows[0];
         const photoRow = userRows.find(
-          (r) => r.driver?.idProofBase64 || r.driver?.drivingLicenseBase64
+          (r) => (r.driver?.idProofBase64 && r.driver.idProofBase64.length > 50) || (r.driver?.drivingLicenseBase64 && r.driver.drivingLicenseBase64.length > 50)
         ) || latest;
+
+        const idRow = userRows.find((r) => r.driver?.idProofBase64 && r.driver.idProofBase64.length > 50) || photoRow;
+        const dlRow = userRows.find((r) => r.driver?.drivingLicenseBase64 && r.driver.drivingLicenseBase64.length > 50) || photoRow;
 
         const status = latest.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
           : latest.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
           : (latest.driver?.status || localRec?.status || 'PENDING');
+
+        const resolvedIdProof = idRow?.driver?.idProofBase64 || photoRow?.driver?.idProofBase64 || localRec?.idProofBase64 || '';
+        const resolvedIdProofName = idRow?.driver?.idProofName || photoRow?.driver?.idProofName || localRec?.idProofName || 'Identity Document';
+        const resolvedDl = dlRow?.driver?.drivingLicenseBase64 || photoRow?.driver?.drivingLicenseBase64 || localRec?.drivingLicenseBase64 || '';
+        const resolvedDlName = dlRow?.driver?.drivingLicenseName || photoRow?.driver?.drivingLicenseName || localRec?.drivingLicenseName || 'Driving License';
 
         const rec = {
           ...(localRec || {}),
@@ -888,10 +895,10 @@ export async function dbGetVerificationByEmail(email) {
           email: normEmail,
           status,
           rowId: latest.id,
-          idProofBase64: photoRow.driver?.idProofBase64 || latest.driver?.idProofBase64 || localRec?.idProofBase64 || '',
-          idProofName: photoRow.driver?.idProofName || latest.driver?.idProofName || localRec?.idProofName || 'Identity Document',
-          drivingLicenseBase64: photoRow.driver?.drivingLicenseBase64 || latest.driver?.drivingLicenseBase64 || localRec?.drivingLicenseBase64 || '',
-          drivingLicenseName: photoRow.driver?.drivingLicenseName || latest.driver?.drivingLicenseName || localRec?.drivingLicenseName || 'Driving License',
+          idProofBase64: resolvedIdProof,
+          idProofName: resolvedIdProofName,
+          drivingLicenseBase64: resolvedDl,
+          drivingLicenseName: resolvedDlName,
           submittedAt: photoRow.driver?.submittedAt || latest.driver?.submittedAt || localRec?.submittedAt || new Date(getRowTimestamp(photoRow)).toISOString(),
           reviewedAt: latest.driver?.reviewedAt || (status !== 'PENDING' ? new Date(getRowTimestamp(latest)).toISOString() : null) || localRec?.reviewedAt,
           adminNotes: latest.driver?.adminNotes || localRec?.adminNotes || '',
@@ -973,13 +980,21 @@ export async function dbGetAllVerifications() {
         userRows.sort((a, b) => getRowTimestamp(b) - getRowTimestamp(a));
         const latest = userRows[0];
         const photoRow = userRows.find(
-          (r) => r.driver?.idProofBase64 || r.driver?.drivingLicenseBase64
+          (r) => (r.driver?.idProofBase64 && r.driver.idProofBase64.length > 50) || (r.driver?.drivingLicenseBase64 && r.driver.drivingLicenseBase64.length > 50)
         ) || latest;
+
+        const idRow = userRows.find((r) => r.driver?.idProofBase64 && r.driver.idProofBase64.length > 50) || photoRow;
+        const dlRow = userRows.find((r) => r.driver?.drivingLicenseBase64 && r.driver.drivingLicenseBase64.length > 50) || photoRow;
 
         const existing = emailMap.get(userEmail);
         const status = latest.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
           : latest.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
           : (latest.driver?.status || existing?.status || 'PENDING');
+
+        const resolvedIdProof = idRow?.driver?.idProofBase64 || photoRow?.driver?.idProofBase64 || existing?.idProofBase64 || '';
+        const resolvedIdProofName = idRow?.driver?.idProofName || photoRow?.driver?.idProofName || existing?.idProofName || 'Identity Document';
+        const resolvedDl = dlRow?.driver?.drivingLicenseBase64 || photoRow?.driver?.drivingLicenseBase64 || existing?.drivingLicenseBase64 || '';
+        const resolvedDlName = dlRow?.driver?.drivingLicenseName || photoRow?.driver?.drivingLicenseName || existing?.drivingLicenseName || 'Driving License';
 
         emailMap.set(userEmail, {
           ...(existing || {}),
@@ -989,10 +1004,10 @@ export async function dbGetAllVerifications() {
           email: userEmail,
           status,
           rowId: latest.id,
-          idProofBase64: photoRow.driver?.idProofBase64 || latest.driver?.idProofBase64 || existing?.idProofBase64 || '',
-          idProofName: photoRow.driver?.idProofName || latest.driver?.idProofName || existing?.idProofName || 'Identity Document',
-          drivingLicenseBase64: photoRow.driver?.drivingLicenseBase64 || latest.driver?.drivingLicenseBase64 || existing?.drivingLicenseBase64 || '',
-          drivingLicenseName: photoRow.driver?.drivingLicenseName || latest.driver?.drivingLicenseName || existing?.drivingLicenseName || 'Driving License',
+          idProofBase64: resolvedIdProof,
+          idProofName: resolvedIdProofName,
+          drivingLicenseBase64: resolvedDl,
+          drivingLicenseName: resolvedDlName,
           submittedAt: latest.driver?.submittedAt || photoRow.driver?.submittedAt || existing?.submittedAt || new Date(getRowTimestamp(photoRow)).toISOString(),
           reviewedAt: latest.driver?.reviewedAt || existing?.reviewedAt || (status !== 'PENDING' ? new Date(getRowTimestamp(latest)).toISOString() : null),
           adminNotes: latest.driver?.adminNotes || existing?.adminNotes || '',
@@ -1063,7 +1078,7 @@ export async function dbUpdateVerificationStatus(idOrEmail, action, adminNotes =
 
   const finalNotes = adminNotes || defaultNotes;
   const normEmail = (record?.email || idOrEmail).toLowerCase().trim();
-  const updateId = `doc_${normEmail.replace(/[^a-z0-9]/g, '_')}_${now.getTime()}`;
+  const updateId = `doc_${normEmail.replace(/[^a-z0-9]/g, '_')}`;
 
   const updatedRecord = {
     ...(record || {}),
