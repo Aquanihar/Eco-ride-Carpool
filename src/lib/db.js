@@ -19,6 +19,68 @@ const memoryDB = globalStore;
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const VERIFICATIONS_FILE = path.join(DATA_DIR, 'verifications.json');
+const RIDES_FILE = path.join(DATA_DIR, 'rides.json');
+const RIDE_REQUESTS_FILE = path.join(DATA_DIR, 'ride_requests.json');
+const BOOKINGS_FILE = path.join(DATA_DIR, 'bookings.json');
+const NOTIFICATIONS_FILE = path.join(DATA_DIR, 'notifications.json');
+
+function loadAllDataFromFiles() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    if (fs.existsSync(RIDES_FILE)) {
+      const list = JSON.parse(fs.readFileSync(RIDES_FILE, 'utf8'));
+      if (Array.isArray(list)) list.forEach((r) => { if (r && r.id) memoryDB.rides.set(r.id, r); });
+    }
+    if (fs.existsSync(RIDE_REQUESTS_FILE)) {
+      const list = JSON.parse(fs.readFileSync(RIDE_REQUESTS_FILE, 'utf8'));
+      if (Array.isArray(list)) list.forEach((req) => { if (req && req.id) memoryDB.rideRequests.set(req.id, req); });
+    }
+    if (fs.existsSync(BOOKINGS_FILE)) {
+      const list = JSON.parse(fs.readFileSync(BOOKINGS_FILE, 'utf8'));
+      if (Array.isArray(list)) list.forEach((b) => { if (b && b.id) memoryDB.bookings.set(b.id, b); });
+    }
+    if (fs.existsSync(NOTIFICATIONS_FILE)) {
+      const list = JSON.parse(fs.readFileSync(NOTIFICATIONS_FILE, 'utf8'));
+      if (Array.isArray(list)) list.forEach((n) => { if (n && n.id) memoryDB.notifications.set(n.id, n); });
+    }
+  } catch (e) {
+    console.error('Error loading data from file:', e.message);
+  }
+}
+
+export function saveRidesToFile() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    const list = Array.from(memoryDB.rides.values());
+    fs.writeFileSync(RIDES_FILE, JSON.stringify(list, null, 2), 'utf8');
+  } catch (e) {}
+}
+
+export function saveRequestsToFile() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    const list = Array.from(memoryDB.rideRequests.values());
+    fs.writeFileSync(RIDE_REQUESTS_FILE, JSON.stringify(list, null, 2), 'utf8');
+  } catch (e) {}
+}
+
+export function saveBookingsToFile() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    const list = Array.from(memoryDB.bookings.values());
+    fs.writeFileSync(BOOKINGS_FILE, JSON.stringify(list, null, 2), 'utf8');
+  } catch (e) {}
+}
+
+export function saveNotificationsToFile() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    const list = Array.from(memoryDB.notifications.values());
+    fs.writeFileSync(NOTIFICATIONS_FILE, JSON.stringify(list, null, 2), 'utf8');
+  } catch (e) {}
+}
 
 function loadVerificationsFromFile() {
   try {
@@ -61,8 +123,9 @@ function saveVerificationsToFile() {
   }
 }
 
-// Initial load of verifications
+// Initial load of verifications and persistent data
 loadVerificationsFromFile();
+loadAllDataFromFiles();
 
 async function withTimeout(promise, ms = 6000) {
   let timeoutId;
@@ -187,13 +250,36 @@ memoryDB.notifications.set(sampleNotif.id, sampleNotif);
 /* Helper: Check if departure has passed */
 export function isDeparturePassed(dateStr, timeStr) {
   if (!dateStr || !timeStr) return false;
-  const departureDateTime = new Date(`${dateStr}T${timeStr}:00`);
-  return departureDateTime.getTime() < Date.now();
+  try {
+    let cleanTime = String(timeStr).trim();
+    let isPM = false;
+    let isAM = false;
+    if (cleanTime.toUpperCase().includes('PM')) {
+      isPM = true;
+      cleanTime = cleanTime.replace(/PM/i, '').trim();
+    } else if (cleanTime.toUpperCase().includes('AM')) {
+      isAM = true;
+      cleanTime = cleanTime.replace(/AM/i, '').trim();
+    }
+    const [h, m] = cleanTime.split(':').map(Number);
+    let hour = isNaN(h) ? 9 : h;
+    let min = isNaN(m) ? 0 : m;
+    if (isPM && hour < 12) hour += 12;
+    if (isAM && hour === 12) hour = 0;
+
+    const formattedHour = String(hour).padStart(2, '0');
+    const formattedMin = String(min).padStart(2, '0');
+    const departureDateTime = new Date(`${dateStr}T${formattedHour}:${formattedMin}:00`);
+    if (isNaN(departureDateTime.getTime())) return false;
+    return departureDateTime.getTime() < Date.now();
+  } catch (e) {
+    return false;
+  }
 }
 
 /* Automatic expiration helper for pending requests */
 export function processExpiredRequests() {
-  const now = Date.now();
+  let changed = false;
   for (const [id, req] of memoryDB.rideRequests.entries()) {
     if (req.status === 'PENDING') {
       const ride = memoryDB.rides.get(req.ride_id);
@@ -201,8 +287,12 @@ export function processExpiredRequests() {
         req.status = 'EXPIRED';
         req.updated_at = new Date().toISOString();
         memoryDB.rideRequests.set(id, req);
+        changed = true;
       }
     }
+  }
+  if (changed) {
+    saveRequestsToFile();
   }
 }
 
@@ -226,28 +316,33 @@ export async function dbSaveUser(userData) {
 
 /* Ride Operations */
 export async function dbCreateRide(rideData) {
+  const originStr = typeof rideData.origin === 'object' ? rideData.origin.name : (rideData.origin || (rideData.from ? (typeof rideData.from === 'object' ? rideData.from.name : rideData.from) : ''));
+  const destStr = typeof rideData.destination === 'object' ? rideData.destination.name : (rideData.destination || (rideData.to ? (typeof rideData.to === 'object' ? rideData.to.name : rideData.to) : ''));
+  const total = Number(rideData.totalSeats || rideData.total_seats || rideData.seats || 3);
+  const avail = Number(rideData.availableSeats ?? rideData.available_seats ?? rideData.seatsAvailable ?? total);
+
   const ride = {
     id: rideData.id || `r_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-    driver_id: rideData.driverId || rideData.driver_id,
+    driver_id: rideData.driverId || rideData.driver_id || 'u_driver_default',
     vehicle_id: rideData.vehicleId || rideData.vehicle_id || null,
-    origin: rideData.origin,
-    destination: rideData.destination,
-    origin_latitude: rideData.originLatitude || rideData.origin_latitude || null,
-    origin_longitude: rideData.originLongitude || rideData.origin_longitude || null,
-    destination_latitude: rideData.destinationLatitude || rideData.destination_latitude || null,
-    destination_longitude: rideData.destinationLongitude || rideData.destination_longitude || null,
-    departure_date: rideData.departureDate || rideData.departure_date,
-    departure_time: rideData.departureTime || rideData.departure_time,
-    total_seats: Number(rideData.totalSeats || rideData.total_seats),
-    available_seats: Number(rideData.totalSeats || rideData.total_seats),
-    price_per_seat: Number(rideData.pricePerSeat || rideData.price_per_seat),
+    origin: originStr,
+    destination: destStr,
+    origin_latitude: rideData.originLatitude || rideData.origin_latitude || (rideData.from?.lat || null),
+    origin_longitude: rideData.originLongitude || rideData.origin_longitude || (rideData.from?.lng || null),
+    destination_latitude: rideData.destinationLatitude || rideData.destination_latitude || (rideData.to?.lat || null),
+    destination_longitude: rideData.destinationLongitude || rideData.destination_longitude || (rideData.to?.lng || null),
+    departure_date: rideData.departureDate || rideData.departure_date || rideData.date,
+    departure_time: rideData.departureTime || rideData.departure_time || rideData.time,
+    total_seats: total,
+    available_seats: avail,
+    price_per_seat: Number(rideData.pricePerSeat || rideData.price_per_seat || rideData.price || 50),
     status: rideData.status || 'PUBLISHED',
-    waypoints: rideData.waypoints || [],
+    waypoints: Array.isArray(rideData.waypoints) ? rideData.waypoints : [],
     driver: rideData.driver || {
-      id: rideData.driverId,
-      name: rideData.driverName || 'Driver',
+      id: rideData.driverId || rideData.driver_id,
+      name: rideData.driverName || 'Verified Driver',
       rating: 4.8,
-      total_ratings: 10,
+      total_ratings: 12,
       is_verified: true,
     },
     vehicle: rideData.vehicle || {
@@ -255,26 +350,36 @@ export async function dbCreateRide(rideData) {
       color: rideData.vehicleColor || 'White',
       registration_number: rideData.vehiclePlate || 'MH-01-AB-0000',
     },
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
+    created_at: rideData.createdAt || rideData.created_at || new Date().toISOString(),
+    updated_at: rideData.updatedAt || rideData.updated_at || new Date().toISOString(),
   };
 
+  // Primary: Central Supabase Database
   try {
-    const { data, error } = await supabase.from('rides').insert([ride]).select().single();
+    const { data, error } = await withTimeout(supabase.from('rides').upsert([ride]).select().single(), 2500);
     if (data && !error) {
       memoryDB.rides.set(data.id, data);
+      saveRidesToFile();
       return data;
     }
-  } catch (e) {}
+  } catch (e) {
+    console.warn('Notice: Supabase ride insert fallback:', e.message);
+  }
 
+  // Backup: Local persistent disk file & memory
   memoryDB.rides.set(ride.id, ride);
+  saveRidesToFile();
   return ride;
 }
 
 export async function dbGetRideById(rideId) {
   try {
-    const { data } = await supabase.from('rides').select('*').eq('id', rideId).single();
-    if (data) return data;
+    const { data } = await withTimeout(supabase.from('rides').select('*').eq('id', rideId).single(), 2000);
+    if (data) {
+      memoryDB.rides.set(data.id, data);
+      saveRidesToFile();
+      return data;
+    }
   } catch (e) {}
 
   if (memoryDB.rides.has(rideId)) {
@@ -289,30 +394,66 @@ export async function dbGetRideById(rideId) {
 
 export async function dbSearchRides({ origin, destination, date, passengerCount = 1 }) {
   processExpiredRequests();
-  let allRides = [];
+  const ridesMap = new Map();
 
-  try {
-    const { data } = await supabase.from('rides').select('*').eq('status', 'PUBLISHED');
-    if (data && data.length > 0) allRides = data;
-  } catch (e) {}
-
-  if (allRides.length === 0) {
-    allRides = Array.from(memoryDB.rides.values());
+  // Populate from local file/memory store first
+  for (const [id, r] of memoryDB.rides.entries()) {
+    ridesMap.set(id, r);
   }
 
+  // Fetch live from central Supabase database
+  try {
+    const { data, error } = await withTimeout(supabase.from('rides').select('*').eq('status', 'PUBLISHED'), 2500);
+    if (data && !error && data.length > 0) {
+      for (const row of data) {
+        ridesMap.set(row.id, row);
+        memoryDB.rides.set(row.id, row);
+      }
+      saveRidesToFile();
+    }
+  } catch (e) {
+    console.warn('Notice: Supabase search live fetch fallback:', e.message);
+  }
+
+  const allRides = Array.from(ridesMap.values());
   const requestedSeats = Number(passengerCount) || 1;
 
   return allRides.filter((ride) => {
+    // Only published rides
     if (ride.status !== 'PUBLISHED') return false;
-    if (ride.available_seats < requestedSeats) return false;
-    if (isDeparturePassed(ride.departure_date, ride.departure_time)) return false;
 
-    if (date && ride.departure_date !== date) return false;
+    // Check available seats
+    const avail = Number(ride.available_seats ?? ride.availableSeats ?? 0);
+    if (avail < requestedSeats) return false;
 
-    if (origin || destination) {
-      const origMatch = !origin || ride.origin.toLowerCase().includes(origin.toLowerCase());
-      const destMatch = !destination || ride.destination.toLowerCase().includes(destination.toLowerCase());
-      if (!origMatch && !destMatch) return false;
+    // Check departure expiration
+    const depDate = ride.departure_date || ride.date;
+    const depTime = ride.departure_time || ride.time;
+    if (isDeparturePassed(depDate, depTime)) return false;
+
+    // Date filter if specified
+    if (date && depDate && depDate !== date) return false;
+
+    // Origin matching (case-insensitive substring)
+    if (origin && origin.trim()) {
+      const origQuery = origin.toLowerCase().trim();
+      const origText = (ride.origin || ride.from?.name || '').toLowerCase();
+      const origWaypoints = (ride.waypoints || []).some((w) => {
+        const name = (typeof w === 'string' ? w : w.name || '').toLowerCase();
+        return name.includes(origQuery);
+      });
+      if (!origText.includes(origQuery) && !origWaypoints) return false;
+    }
+
+    // Destination matching (case-insensitive substring)
+    if (destination && destination.trim()) {
+      const destQuery = destination.toLowerCase().trim();
+      const destText = (ride.destination || ride.to?.name || '').toLowerCase();
+      const destWaypoints = (ride.waypoints || []).some((w) => {
+        const name = (typeof w === 'string' ? w : w.name || '').toLowerCase();
+        return name.includes(destQuery);
+      });
+      if (!destText.includes(destQuery) && !destWaypoints) return false;
     }
 
     return true;
@@ -341,23 +482,31 @@ export async function dbCreateRideRequest(requestData) {
   };
 
   try {
-    const { data } = await supabase.from('ride_requests').insert([req]).select().single();
-    if (data) return data;
+    const { data } = await withTimeout(supabase.from('ride_requests').insert([req]).select().single(), 2500);
+    if (data) {
+      memoryDB.rideRequests.set(data.id, data);
+      saveRequestsToFile();
+      return data;
+    }
   } catch (e) {}
 
   memoryDB.rideRequests.set(req.id, req);
+  saveRequestsToFile();
   return req;
 }
 
 export async function dbGetActiveRideRequest(rideId, passengerId) {
   processExpiredRequests();
   try {
-    const { data } = await supabase
-      .from('ride_requests')
-      .select('*')
-      .eq('ride_id', rideId)
-      .eq('passenger_id', passengerId)
-      .in('status', ['PENDING', 'ACCEPTED']);
+    const { data } = await withTimeout(
+      supabase
+        .from('ride_requests')
+        .select('*')
+        .eq('ride_id', rideId)
+        .eq('passenger_id', passengerId)
+        .in('status', ['PENDING', 'ACCEPTED']),
+      2000
+    );
     if (data && data.length > 0) return data[0];
   } catch (e) {}
 
@@ -375,8 +524,12 @@ export async function dbGetActiveRideRequest(rideId, passengerId) {
 
 export async function dbGetRideRequestById(requestId) {
   try {
-    const { data } = await supabase.from('ride_requests').select('*').eq('id', requestId).single();
-    if (data) return data;
+    const { data } = await withTimeout(supabase.from('ride_requests').select('*').eq('id', requestId).single(), 2000);
+    if (data) {
+      memoryDB.rideRequests.set(data.id, data);
+      saveRequestsToFile();
+      return data;
+    }
   } catch (e) {}
 
   if (memoryDB.rideRequests.has(requestId)) {
@@ -393,30 +546,44 @@ export async function dbGetRideRequestById(requestId) {
 
 export async function dbGetRequestsByRideId(rideId) {
   processExpiredRequests();
+  const map = new Map();
+  for (const req of memoryDB.rideRequests.values()) {
+    if (req.ride_id === rideId) map.set(req.id, req);
+  }
+
   try {
-    const { data } = await supabase.from('ride_requests').select('*').eq('ride_id', rideId);
-    if (data && data.length > 0) return data;
+    const { data } = await withTimeout(supabase.from('ride_requests').select('*').eq('ride_id', rideId), 2000);
+    if (data && data.length > 0) {
+      for (const row of data) {
+        map.set(row.id, row);
+        memoryDB.rideRequests.set(row.id, row);
+      }
+      saveRequestsToFile();
+    }
   } catch (e) {}
 
-  const res = [];
-  for (const req of memoryDB.rideRequests.values()) {
-    if (req.ride_id === rideId) res.push(req);
-  }
-  return res;
+  return Array.from(map.values());
 }
 
 export async function dbGetRequestsByPassengerId(passengerId) {
   processExpiredRequests();
+  const map = new Map();
+  for (const req of memoryDB.rideRequests.values()) {
+    if (req.passenger_id === passengerId) map.set(req.id, req);
+  }
+
   try {
-    const { data } = await supabase.from('ride_requests').select('*').eq('passenger_id', passengerId);
-    if (data && data.length > 0) return data;
+    const { data } = await withTimeout(supabase.from('ride_requests').select('*').eq('passenger_id', passengerId), 2000);
+    if (data && data.length > 0) {
+      for (const row of data) {
+        map.set(row.id, row);
+        memoryDB.rideRequests.set(row.id, row);
+      }
+      saveRequestsToFile();
+    }
   } catch (e) {}
 
-  const res = [];
-  for (const req of memoryDB.rideRequests.values()) {
-    if (req.passenger_id === passengerId) res.push(req);
-  }
-  return res;
+  return Array.from(map.values());
 }
 
 /* TRANSACTIONAL CONCURRENCY-SAFE ACCEPTANCE LOGIC */
@@ -520,13 +687,23 @@ export async function dbAcceptRideRequest(requestId, driverId) {
   memoryDB.rides.set(ride.id, ride);
   memoryDB.rideRequests.set(request.id, request);
   memoryDB.bookings.set(createdBooking.id, createdBooking);
+  saveRidesToFile();
+  saveRequestsToFile();
+  saveBookingsToFile();
 
   // Sync to Supabase table if available
   try {
-    await supabase.from('rides').update({ available_seats: ride.available_seats }).eq('id', ride.id);
-    await supabase.from('ride_requests').update({ status: 'ACCEPTED' }).eq('id', request.id);
-    await supabase.from('bookings').insert([createdBooking]);
-  } catch (e) {}
+    await withTimeout(
+      Promise.all([
+        supabase.from('rides').update({ available_seats: ride.available_seats }).eq('id', ride.id),
+        supabase.from('ride_requests').update({ status: 'ACCEPTED' }).eq('id', request.id),
+        supabase.from('bookings').insert([createdBooking]),
+      ]),
+      2500
+    );
+  } catch (e) {
+    console.warn('Notice: Supabase acceptance update:', e.message);
+  }
 
   // Create Notification for passenger
   await dbCreateNotification({
@@ -569,6 +746,7 @@ export async function dbRejectRideRequest(requestId, driverId) {
   request.status = 'REJECTED';
   request.updated_at = new Date().toISOString();
   memoryDB.rideRequests.set(request.id, request);
+  saveRequestsToFile();
 
   try {
     await supabase.from('ride_requests').update({ status: 'REJECTED' }).eq('id', request.id);
@@ -604,6 +782,11 @@ export async function dbCancelPendingRequest(requestId, passengerId) {
   request.status = 'CANCELLED';
   request.updated_at = new Date().toISOString();
   memoryDB.rideRequests.set(request.id, request);
+  saveRequestsToFile();
+
+  try {
+    await supabase.from('ride_requests').update({ status: 'CANCELLED' }).eq('id', request.id);
+  } catch (e) {}
 
   const ride = await dbGetRideById(request.ride_id);
   if (ride) {
@@ -651,6 +834,13 @@ export async function dbCancelBooking(bookingId, passengerId) {
 
   memoryDB.rides.set(ride.id, ride);
   memoryDB.bookings.set(booking.id, booking);
+  saveRidesToFile();
+  saveBookingsToFile();
+
+  try {
+    await supabase.from('rides').update({ available_seats: restoredSeats }).eq('id', ride.id);
+    await supabase.from('bookings').update({ status: 'CANCELLED', cancelled_at: booking.cancelled_at }).eq('id', booking.id);
+  } catch (e) {}
 
   // Notify driver
   await dbCreateNotification({
@@ -679,6 +869,11 @@ export async function dbCancelRide(rideId, driverId) {
   ride.status = 'CANCELLED';
   ride.updated_at = new Date().toISOString();
   memoryDB.rides.set(ride.id, ride);
+  saveRidesToFile();
+
+  try {
+    await supabase.from('rides').update({ status: 'CANCELLED' }).eq('id', ride.id);
+  } catch (e) {}
 
   // Cancel pending requests
   for (const req of memoryDB.rideRequests.values()) {
@@ -696,6 +891,7 @@ export async function dbCancelRide(rideId, driverId) {
       });
     }
   }
+  saveRequestsToFile();
 
   // Cancel confirmed bookings
   for (const b of memoryDB.bookings.values()) {
@@ -715,6 +911,7 @@ export async function dbCancelRide(rideId, driverId) {
       });
     }
   }
+  saveBookingsToFile();
 
   return { success: true, message: 'Ride cancelled successfully.', data: { ride } };
 }
@@ -739,9 +936,9 @@ export async function dbCreateNotification(notifData) {
     type: notifData.type || 'info',
     title: notifData.title || 'Notification',
     message: notifData.message,
-    related_ride_id: notifData.relatedRideId || null,
-    related_request_id: notifData.relatedRequestId || null,
-    related_booking_id: notifData.relatedBookingId || null,
+    related_ride_id: notifData.relatedRideId || notifData.related_ride_id || null,
+    related_request_id: notifData.relatedRequestId || notifData.related_request_id || null,
+    related_booking_id: notifData.relatedBookingId || notifData.related_booking_id || null,
     is_read: false,
     created_at: new Date().toISOString(),
   };
@@ -751,14 +948,32 @@ export async function dbCreateNotification(notifData) {
   } catch (e) {}
 
   memoryDB.notifications.set(notif.id, notif);
+  saveNotificationsToFile();
   return notif;
 }
 
 export async function dbGetNotificationsByUserId(userId) {
-  const res = [];
+  const notifMap = new Map();
   for (const n of memoryDB.notifications.values()) {
-    if (n.user_id === userId) res.push(n);
+    if (n.user_id === userId) notifMap.set(n.id, n);
   }
+
+  try {
+    const { data } = await supabase
+      .from('notifications')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+    if (data && data.length > 0) {
+      for (const row of data) {
+        notifMap.set(row.id, row);
+        memoryDB.notifications.set(row.id, row);
+      }
+      saveNotificationsToFile();
+    }
+  } catch (e) {}
+
+  const res = Array.from(notifMap.values());
   return res.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 }
 

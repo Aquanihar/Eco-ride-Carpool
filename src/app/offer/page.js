@@ -364,9 +364,5 @@ function OfferContent() {
 }
 
 export default function OfferPage() {
-  return (
-    <AppProvider>
-      <OfferContent />
-    </AppProvider>
-  );
+  return <OfferContent />;
 }

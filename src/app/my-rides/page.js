@@ -32,6 +32,8 @@ function MyRidesContent() {
     notifications,
     fetchNotifications,
     fetchRides,
+    requests,
+    fetchPassengerRequests,
   } = useApp();
 
   const [tab, setTab] = useState('requests');
@@ -42,6 +44,8 @@ function MyRidesContent() {
   /* Load requests for all rides */
   const loadData = async () => {
     try {
+      await fetchRides();
+      await fetchPassengerRequests();
       let incoming = [];
       for (const ride of rides) {
         const res = await fetch(`/api/rides/${ride.id}/requests?driverId=${ride.driver?.id || user.id}`);
@@ -67,7 +71,8 @@ function MyRidesContent() {
   useEffect(() => {
     loadData();
     fetchNotifications();
-  }, [rides, fetchNotifications]);
+    fetchPassengerRequests();
+  }, [rides.length, fetchNotifications, fetchPassengerRequests]);
 
   /* Handle Driver Accepting a Ride Request */
   const handleAccept = async (req) => {
@@ -205,6 +210,13 @@ function MyRidesContent() {
               <AlertCircle size={18} /> Driver Incoming Requests ({requestsList.length})
             </button>
             <button
+              className={`${styles.tab} ${tab === 'my-requests' ? styles.active : ''}`}
+              onClick={() => setTab('my-requests')}
+              id="tab-my-requests"
+            >
+              <Ticket size={18} /> Passenger Requests Sent ({requests.length})
+            </button>
+            <button
               className={`${styles.tab} ${tab === 'offered' ? styles.active : ''}`}
               onClick={() => setTab('offered')}
               id="tab-offered"
@@ -293,6 +305,50 @@ function MyRidesContent() {
             </div>
           )}
 
+          {/* Tab: Passenger Requests Sent */}
+          {tab === 'my-requests' && (
+            <div className={styles.list}>
+              {requests.length > 0 ? (
+                requests.map((req) => (
+                  <div key={req.id} className="card" style={{ padding: '20px', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '14px' }}>
+                    <div style={{ flex: '1', minWidth: '280px' }}>
+                      <div style={{ fontWeight: '700', fontSize: '1.15rem', marginBottom: '6px', color: '#0f172a' }}>
+                        Trip: {req.rideOrigin || req.pickup_location || 'Pickup'} → {req.rideDestination || req.drop_location || 'Destination'}
+                      </div>
+                      <div style={{ color: '#475569', fontSize: '0.95rem', marginBottom: '4px' }}>
+                        <strong>Seats Requested:</strong> {req.seats_requested} seat(s)
+                      </div>
+                      <div style={{ color: '#64748b', fontSize: '0.9rem' }}>
+                        Pickup: {req.pickup_location || 'Standard'} | Drop: {req.drop_location || 'Standard'}
+                      </div>
+                      {req.message && (
+                        <div style={{ fontStyle: 'italic', marginTop: '6px', fontSize: '0.9rem', color: '#334155', background: '#f1f5f9', padding: '6px 10px', borderRadius: '6px' }}>
+                          "{req.message}"
+                        </div>
+                      )}
+                      <div style={{ marginTop: '10px' }}>
+                        <span className="badge" style={{ background: req.status === 'PENDING' ? '#fef3c7' : req.status === 'ACCEPTED' ? '#d1fae5' : '#fee2e2', color: req.status === 'PENDING' ? '#92400e' : req.status === 'ACCEPTED' ? '#065f46' : '#991b1b', padding: '6px 14px', borderRadius: '8px', fontSize: '0.9rem', fontWeight: '800' }}>
+                          REQUEST STATUS: {req.status}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className={styles.empty}>
+                  <Ticket size={48} className={styles.emptyIcon} />
+                  <h3 className="heading-md">No passenger requests sent yet</h3>
+                  <p className="text-base" style={{ marginBottom: '16px' }}>
+                    Find a ride and click "Request Seat" to send a booking request to a driver!
+                  </p>
+                  <Link href="/search" className="btn btn-primary">
+                    Find Rides Now
+                  </Link>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Tab 2: Offered Rides */}
           {tab === 'offered' && (
             <div className={styles.list}>
@@ -369,9 +425,5 @@ function MyRidesContent() {
 }
 
 export default function MyRidesPage() {
-  return (
-    <AppProvider>
-      <MyRidesContent />
-    </AppProvider>
-  );
+  return <MyRidesContent />;
 }

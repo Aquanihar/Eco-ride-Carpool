@@ -35,9 +35,5 @@ function HomePage() {
 }
 
 export default function Home() {
-  return (
-    <AppProvider>
-      <HomePage />
-    </AppProvider>
-  );
+  return <HomePage />;
 }

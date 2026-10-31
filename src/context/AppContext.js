@@ -1,9 +1,33 @@
 'use client';
 
 import { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
 
 export const AppContext = createContext(null);
+
+export const DEMO_PROFILES = {
+  driverA: {
+    id: 'u_driver_a',
+    name: 'Driver A (Aarav)',
+    email: 'driver.a@example.com',
+    phone: '9876500001',
+    rating: 4.9,
+    trips: 42,
+    co2Saved: 160,
+    moneySaved: 5400,
+    isDriver: true,
+  },
+  passengerB: {
+    id: 'u_passenger_b',
+    name: 'Passenger B (Priya)',
+    email: 'passenger.b@example.com',
+    phone: '9876500002',
+    rating: 4.8,
+    trips: 12,
+    co2Saved: 24,
+    moneySaved: 1200,
+    isDriver: false,
+  },
+};
 
 export function AppProvider({ children }) {
   const [rides, setRides] = useState([]);
@@ -21,52 +45,104 @@ export function AppProvider({ children }) {
   });
   const [bookings, setBookings] = useState([]);
   const [requests, setRequests] = useState([]);
-  const [driverIncomingRequests, setDriverIncomingRequests] = useState([]);
   const [notifications, setNotifications] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
 
-  /* Fetch rides from backend API */
-  const fetchRides = useCallback(async () => {
+  // Restore authenticated session from localStorage on mount
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('raahi_user');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed && parsed.id) {
+            setUser(parsed);
+            setIsLoggedIn(true);
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load user from localStorage:', e);
+      }
+    }
+  }, []);
+
+  /* Fetch rides from backend API (Central Database) */
+  const fetchRides = useCallback(async (filters = {}) => {
+    setIsSearching(true);
     try {
-      const res = await fetch('/api/rides');
+      const params = new URLSearchParams();
+      if (filters.origin) params.append('origin', filters.origin);
+      if (filters.destination) params.append('destination', filters.destination);
+      if (filters.date) params.append('date', filters.date);
+      if (filters.passengerCount) params.append('passengerCount', filters.passengerCount);
+
+      const qs = params.toString();
+      const url = qs ? `/api/rides?${qs}` : '/api/rides';
+      const res = await fetch(url, { cache: 'no-store' });
       const data = await res.json();
+
       if (data.success && data.rides) {
-        // Map backend schema to UI format
-        const mappedRides = data.rides.map((r) => ({
-          id: r.id,
-          driver: {
-            id: r.driver_id || r.driver?.id,
-            name: r.driver?.name || 'Verified Driver',
-            rating: r.driver?.rating || 4.8,
-            trips: r.driver?.total_ratings || 24,
-            verified: true,
-          },
-          from: { name: r.origin, lat: r.origin_latitude, lng: r.origin_longitude },
-          to: { name: r.destination, lat: r.destination_latitude, lng: r.destination_longitude },
-          waypoints: r.waypoints || [],
-          date: r.departure_date,
-          time: r.departure_time,
-          seats: r.total_seats,
-          seatsAvailable: r.available_seats,
-          price: r.price_per_seat,
-          vehicle: {
-            model: r.vehicle?.model || 'Sedan',
-            color: r.vehicle?.color || 'White',
-            plate: r.vehicle?.registration_number || 'MH-01',
-          },
-          preferences: ['No Smoking', 'Music OK'],
-          status: r.status === 'PUBLISHED' ? 'active' : r.status,
-        }));
+        // Map backend central DB schema to UI format
+        const mappedRides = data.rides.map((r) => {
+          const originName = r.origin || r.from?.name || r.from || 'Starting Point';
+          const destName = r.destination || r.to?.name || r.to || 'Destination';
+          const driverId = r.driver_id || r.driverId || r.driver?.id || 'u_driver';
+          const driverName = r.driver?.name || r.driverName || 'Verified Driver';
+          const totalSeats = Number(r.total_seats || r.totalSeats || r.seats || 3);
+          const availSeats = Number(r.available_seats ?? r.availableSeats ?? r.seatsAvailable ?? totalSeats);
+          const price = Number(r.price_per_seat || r.pricePerSeat || r.price || 50);
+
+          return {
+            id: r.id,
+            driver: {
+              id: driverId,
+              name: driverName,
+              rating: Number(r.driver?.rating || 4.8),
+              trips: Number(r.driver?.total_ratings || 24),
+              verified: true,
+            },
+            from: {
+              name: originName,
+              lat: r.origin_latitude || r.from?.lat || null,
+              lng: r.origin_longitude || r.from?.lng || null,
+            },
+            to: {
+              name: destName,
+              lat: r.destination_latitude || r.to?.lat || null,
+              lng: r.destination_longitude || r.to?.lng || null,
+            },
+            waypoints: Array.isArray(r.waypoints) ? r.waypoints : [],
+            date: r.departure_date || r.date,
+            time: r.departure_time || r.time,
+            seats: totalSeats,
+            seatsAvailable: availSeats,
+            price: price,
+            vehicle: {
+              model: r.vehicle?.model || r.vehicleModel || 'Standard Sedan',
+              color: r.vehicle?.color || r.vehicleColor || 'White',
+              plate: r.vehicle?.registration_number || r.vehiclePlate || 'MH-01',
+            },
+            preferences: r.preferences || ['No Smoking', 'Music OK'],
+            status: r.status === 'PUBLISHED' ? 'active' : r.status,
+          };
+        });
+
         setRides(mappedRides);
+        return mappedRides;
       }
     } catch (e) {
-      console.error('Error fetching rides:', e);
+      console.error('Error fetching rides from backend:', e);
+    } finally {
+      setIsSearching(false);
     }
+    return [];
   }, []);
 
   /* Fetch User Notifications */
   const fetchNotifications = useCallback(async () => {
+    if (!user?.id) return;
     try {
-      const res = await fetch(`/api/notifications?userId=${user.id}`);
+      const res = await fetch(`/api/notifications?userId=${user.id}`, { cache: 'no-store' });
       const data = await res.json();
       if (data.success && data.notifications) {
         setNotifications(data.notifications);
@@ -74,61 +150,138 @@ export function AppProvider({ children }) {
     } catch (e) {
       console.error('Error fetching notifications:', e);
     }
-  }, [user.id]);
+  }, [user?.id]);
+
+  /* Fetch Passenger Requests */
+  const fetchPassengerRequests = useCallback(async () => {
+    if (!user?.id) return;
+    try {
+      const res = await fetch(`/api/ride-requests?passengerId=${user.id}`, { cache: 'no-store' });
+      const data = await res.json();
+      if (data.success && data.requests) {
+        setRequests(data.requests);
+      }
+    } catch (e) {
+      console.error('Error fetching passenger requests:', e);
+    }
+  }, [user?.id]);
 
   useEffect(() => {
     fetchRides();
-    fetchNotifications();
-  }, [fetchRides, fetchNotifications]);
+  }, [fetchRides]);
 
-  /* Log in / register user */
+  useEffect(() => {
+    if (user?.id) {
+      fetchNotifications();
+      fetchPassengerRequests();
+    }
+  }, [user?.id, fetchNotifications, fetchPassengerRequests]);
+
+  /* Log in user & persist to localStorage */
   const loginUser = useCallback((userData) => {
     const updatedUser = {
       ...user,
-      id: userData.id || `u_${Date.now()}`,
+      id: userData.id || (userData.email ? `u_${userData.email.replace(/[^a-zA-Z0-9]/g, '_')}` : `u_${Date.now()}`),
       name: userData.fullName || userData.name || user.name,
       email: userData.email || user.email,
       phone: userData.phone || user.phone,
+      isDriver: userData.isDriver ?? true,
     };
     setUser(updatedUser);
     setIsLoggedIn(true);
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('raahi_user', JSON.stringify(updatedUser));
+      } catch (e) {}
+    }
   }, [user]);
 
-  /* Search rides */
+  /* Switch demo user profile (Driver A <-> Passenger B) */
+  const switchUser = useCallback((profile) => {
+    setUser(profile);
+    setIsLoggedIn(true);
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('raahi_user', JSON.stringify(profile));
+      } catch (e) {}
+    }
+  }, []);
+
+  /* Log out */
+  const logoutUser = useCallback(() => {
+    const defaultUser = {
+      id: 'u_guest_' + Date.now().toString(36),
+      name: 'Guest User',
+      email: 'guest@example.com',
+      phone: '9876543210',
+      rating: 5.0,
+      trips: 0,
+      co2Saved: 0,
+      moneySaved: 0,
+      isDriver: false,
+    };
+    setUser(defaultUser);
+    setIsLoggedIn(false);
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem('raahi_user');
+      } catch (e) {}
+    }
+  }, []);
+
+  /* Synchronous helper to search cached rides */
   const searchRides = useCallback((from, to, date) => {
     return rides.filter((ride) => {
       const dateMatch = !date || ride.date === date;
       const hasSeats = ride.seatsAvailable > 0;
       const isActive = ride.status === 'active';
-      if (!dateMatch || !hasSeats || !isActive) return false;
+      if (!hasSeats || !isActive) return false;
+      if (date && !dateMatch) return false;
 
-      const query = `${from || ''} ${to || ''}`.toLowerCase().trim();
-      if (!query) return true;
-      const rideText = `${ride.from?.name || ''} ${ride.to?.name || ''}`.toLowerCase();
-      return query.split(' ').some((word) => word.length > 2 && rideText.includes(word));
+      const fromQuery = (from || '').toLowerCase().trim();
+      const toQuery = (to || '').toLowerCase().trim();
+
+      if (fromQuery) {
+        const fromMatch =
+          ride.from?.name?.toLowerCase().includes(fromQuery) ||
+          ride.waypoints?.some((w) => (typeof w === 'string' ? w : w.name || '').toLowerCase().includes(fromQuery));
+        if (!fromMatch) return false;
+      }
+
+      if (toQuery) {
+        const toMatch =
+          ride.to?.name?.toLowerCase().includes(toQuery) ||
+          ride.waypoints?.some((w) => (typeof w === 'string' ? w : w.name || '').toLowerCase().includes(toQuery));
+        if (!toMatch) return false;
+      }
+
+      return true;
     });
   }, [rides]);
 
-  /* Post a new ride (Driver) */
+  /* Post a new ride (Driver) -> Central Database */
   const postRide = useCallback(async (rideData) => {
     try {
+      const payload = {
+        driverId: user.id,
+        driverName: user.name,
+        origin: typeof rideData.from === 'object' ? rideData.from.name : rideData.from,
+        destination: typeof rideData.to === 'object' ? rideData.to.name : rideData.to,
+        departureDate: rideData.date,
+        departureTime: rideData.time,
+        totalSeats: Number(rideData.seats),
+        pricePerSeat: Number(rideData.price),
+        vehicleModel: rideData.vehicle?.model,
+        vehicleColor: rideData.vehicle?.color,
+        vehiclePlate: rideData.vehicle?.plate,
+        waypoints: rideData.waypoints || [],
+        preferences: rideData.preferences || [],
+      };
+
       const res = await fetch('/api/rides', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          driverId: user.id,
-          driverName: user.name,
-          origin: rideData.from.name,
-          destination: rideData.to.name,
-          departureDate: rideData.date,
-          departureTime: rideData.time,
-          totalSeats: rideData.seats,
-          pricePerSeat: rideData.price,
-          vehicleModel: rideData.vehicle?.model,
-          vehicleColor: rideData.vehicle?.color,
-          vehiclePlate: rideData.vehicle?.plate,
-          waypoints: rideData.waypoints,
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (data.success) {
@@ -140,7 +293,7 @@ export function AppProvider({ children }) {
     }
   }, [user, fetchRides]);
 
-  /* Send Ride Request (Passenger) -> Requests PENDING state, NO seat deduction yet */
+  /* Send Ride Request (Passenger) -> Status = PENDING */
   const sendRideRequest = useCallback(async (rideId, seatsRequested = 1, pickupLocation = '', dropLocation = '', message = '') => {
     try {
       const res = await fetch(`/api/rides/${rideId}/requests`, {
@@ -160,6 +313,7 @@ export function AppProvider({ children }) {
       if (data.success) {
         setRequests((prev) => [data.request, ...prev]);
         await fetchNotifications();
+        await fetchPassengerRequests();
         return { success: true, request: data.request, message: data.message };
       } else {
         return { success: false, message: data.message, errorCode: data.errorCode };
@@ -167,9 +321,9 @@ export function AppProvider({ children }) {
     } catch (e) {
       return { success: false, message: e.message };
     }
-  }, [user, fetchNotifications]);
+  }, [user, fetchNotifications, fetchPassengerRequests]);
 
-  /* Accept Ride Request (Driver) -> Deducts seat & Creates CONFIRMED booking */
+  /* Accept Ride Request (Driver) -> Status = ACCEPTED & Seats Decremented */
   const acceptRideRequest = useCallback(async (requestId, targetDriverId) => {
     try {
       const res = await fetch(`/api/ride-requests/${requestId}/accept`, {
@@ -190,7 +344,7 @@ export function AppProvider({ children }) {
     }
   }, [user.id, fetchRides, fetchNotifications]);
 
-  /* Reject Ride Request (Driver) -> No seat deduction */
+  /* Reject Ride Request (Driver) */
   const rejectRideRequest = useCallback(async (requestId) => {
     try {
       const res = await fetch(`/api/ride-requests/${requestId}/reject`, {
@@ -229,7 +383,7 @@ export function AppProvider({ children }) {
     }
   }, [user.id]);
 
-  /* Cancel Confirmed Booking (Passenger) -> Releases seat back */
+  /* Cancel Confirmed Booking (Passenger) */
   const cancelBooking = useCallback(async (bookingId) => {
     try {
       const res = await fetch(`/api/bookings/${bookingId}/cancel`, {
@@ -249,7 +403,7 @@ export function AppProvider({ children }) {
     }
   }, [user.id, fetchRides, fetchNotifications]);
 
-  /* Driver Cancel Ride */
+  /* Cancel Ride (Driver) */
   const cancelRide = useCallback(async (rideId) => {
     try {
       const res = await fetch(`/api/rides/${rideId}/cancel`, {
@@ -285,10 +439,14 @@ export function AppProvider({ children }) {
         setUser,
         isLoggedIn,
         loginUser,
+        logoutUser,
+        switchUser,
+        DEMO_PROFILES,
         bookings,
         requests,
         notifications,
         unreadCount,
+        isSearching,
         searchRides,
         postRide,
         sendRideRequest,
@@ -299,6 +457,7 @@ export function AppProvider({ children }) {
         cancelRide,
         fetchRides,
         fetchNotifications,
+        fetchPassengerRequests,
         markNotificationRead,
       }}
     >

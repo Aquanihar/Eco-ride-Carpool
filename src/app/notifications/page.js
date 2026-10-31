@@ -78,9 +78,5 @@ function NotificationsContent() {
 }
 
 export default function NotificationsPage() {
-  return (
-    <AppProvider>
-      <NotificationsContent />
-    </AppProvider>
-  );
+  return <NotificationsContent />;
 }

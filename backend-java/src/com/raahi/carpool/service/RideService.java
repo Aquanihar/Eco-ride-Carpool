@@ -174,6 +174,8 @@ public class RideService {
        2. GET / SEARCH RIDES
        ------------------------------------------------------------- */
     public List<Map<String, Object>> searchRides(String origin, String destination, String date, int passengerCount) {
+        // Sync fresh published rides from central Supabase database
+        syncFromSupabase();
         List<Map<String, Object>> results = new ArrayList<>();
         int reqSeats = Math.max(1, passengerCount);
 

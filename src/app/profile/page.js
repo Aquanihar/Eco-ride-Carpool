@@ -23,7 +23,7 @@ import {
 import styles from './profile.module.css';
 
 function ProfileContent() {
-  const { user, bookings } = useApp();
+  const { user, bookings, switchUser, logoutUser, DEMO_PROFILES } = useApp();
 
   const impactCards = [
     {
@@ -88,12 +88,23 @@ function ProfileContent() {
                   <Star size={14} className={styles.starIcon} /> {user.rating} rating
                 </span>
               </div>
-              <div className={styles.profileActions}>
-                <button className="btn btn-secondary btn-sm">
-                  <Edit3 size={14} /> Edit Profile
+              <div className={styles.profileActions} style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '10px' }}>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => switchUser(DEMO_PROFILES.driverA)}
+                  style={{ background: user.id === DEMO_PROFILES.driverA.id ? '#059669' : undefined }}
+                >
+                  Switch to Driver A
                 </button>
-                <button className="btn btn-secondary btn-sm">
-                  <Settings size={14} /> Settings
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => switchUser(DEMO_PROFILES.passengerB)}
+                  style={{ background: user.id === DEMO_PROFILES.passengerB.id ? '#0284c7' : undefined, color: user.id === DEMO_PROFILES.passengerB.id ? '#fff' : undefined }}
+                >
+                  Switch to Passenger B
+                </button>
+                <button className="btn btn-secondary btn-sm" onClick={logoutUser}>
+                  <LogOut size={14} /> Sign Out
                 </button>
               </div>
             </div>
@@ -174,9 +185,5 @@ function ProfileContent() {
 }
 
 export default function ProfilePage() {
-  return (
-    <AppProvider>
-      <ProfileContent />
-    </AppProvider>
-  );
+  return <ProfileContent />;
 }

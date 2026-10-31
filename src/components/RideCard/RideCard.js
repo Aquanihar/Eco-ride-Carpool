@@ -118,7 +118,7 @@ export default function RideCard({ ride, onBook, onView }) {
           )}
           {onBook && seatsAvailable > 0 && (
             <button className="btn btn-primary btn-sm" onClick={() => onBook(ride.id)} id={`book-${ride.id}`}>
-              Book Seat
+              Request Seat
             </button>
           )}
         </div>

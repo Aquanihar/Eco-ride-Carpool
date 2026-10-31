@@ -24,7 +24,7 @@ import styles from './search.module.css';
 
 function SearchContent() {
   const searchParams = useSearchParams();
-  const { rides, searchRides, sendRideRequest } = useApp();
+  const { rides, searchRides, sendRideRequest, fetchRides, isSearching } = useApp();
   const [fromLocation, setFromLocation] = useState({ name: searchParams.get('from') || '', lat: null, lng: null });
   const [toLocation, setToLocation] = useState({ name: searchParams.get('to') || '', lat: null, lng: null });
   const [date, setDate] = useState(searchParams.get('date') || '');
@@ -34,6 +34,15 @@ function SearchContent() {
   const [onlyVerified, setOnlyVerified] = useState(false);
   const [requestedToast, setRequestedToast] = useState(null);
   const [selectedRideId, setSelectedRideId] = useState(null);
+
+  // Live fetch from central backend database whenever search query or location changes
+  useEffect(() => {
+    fetchRides({
+      origin: fromLocation.name,
+      destination: toLocation.name,
+      date: date,
+    });
+  }, [fromLocation.name, toLocation.name, date, fetchRides]);
 
   const results = useMemo(() => {
     let res;
@@ -229,10 +238,8 @@ function SearchContent() {
 
 export default function SearchPage() {
   return (
-    <AppProvider>
-      <Suspense fallback={<div style={{ minHeight: '100vh', background: 'var(--bg-primary)' }} />}>
-        <SearchContent />
-      </Suspense>
-    </AppProvider>
+    <Suspense fallback={<div style={{ minHeight: '100vh', background: 'var(--bg-primary)' }} />}>
+      <SearchContent />
+    </Suspense>
   );
 }
