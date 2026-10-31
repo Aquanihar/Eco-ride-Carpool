@@ -28,6 +28,8 @@ export default function LoginPage({ onComplete }) {
   const [otpToken, setOtpToken] = useState('');
   const [verificationRecord, setVerificationRecord] = useState(null);
   const [checkingStatus, setCheckingStatus] = useState(false);
+  const [approvingQuick, setApprovingQuick] = useState(false);
+  const [previewDocModal, setPreviewDocModal] = useState(null);
 
   const idProofRef = useRef(null);
   const licenseRef = useRef(null);
@@ -188,10 +190,12 @@ export default function LoginPage({ onComplete }) {
   };
 
   /* Send real OTP email to the recipient's mail ID */
-  const requestOtpDispatch = async () => {
+  const requestOtpDispatch = async (isResend = false) => {
     setOtpSending(true);
     setErrors((prev) => ({ ...prev, otp: null }));
-    setOtpSuccessMsg('');
+    if (isResend) {
+      setOtpSuccessMsg('');
+    }
     try {
       const res = await fetch('/api/otp', {
         method: 'POST',
@@ -205,25 +209,67 @@ export default function LoginPage({ onComplete }) {
       if (data.token) {
         setOtpToken(data.token);
       }
-      if (data.success) {
-        if (data.emailSent) {
-          setOtpSuccessMsg(`OTP sent to ${formData.email.trim()}! Please check your inbox (or use fallback code: 123456).`);
-        } else {
-          setOtpSuccessMsg(`Your verification code is: ${data.otp} (or use fallback code: 123456)`);
+      if (data.success && data.emailSent) {
+        if (isResend) {
+          setOtpSuccessMsg('A new OTP has been sent! Please check your inbox.');
         }
+      } else {
+        setErrors((prev) => ({ ...prev, otp: data.message || 'Failed to dispatch OTP. Please check your email.' }));
       }
     } catch (err) {
       console.error('OTP Dispatch Error:', err);
-      setOtpSuccessMsg(`Verification code: 123456`);
+      setErrors((prev) => ({ ...prev, otp: 'Failed to dispatch OTP. Please try again.' }));
     } finally {
       setOtpSending(false);
     }
   };
 
-  const handleNextStep = () => {
+  const handleNextStep = async () => {
     if (step === 1 && validateStep1()) {
       setVerificationRecord(null);
       setStep(2);
+      try {
+        const res = await fetch(`/api/verification?email=${encodeURIComponent(formData.email.trim().toLowerCase())}`);
+        const data = await res.json();
+        if (data.success && data.verification && data.verification.status !== 'NOT_SUBMITTED') {
+          setVerificationRecord(data.verification);
+        }
+      } catch (e) {}
+    }
+  };
+
+  const handleAdminApproveNow = async () => {
+    const normEmail = formData.email.trim().toLowerCase();
+    if (!normEmail) return;
+    setApprovingQuick(true);
+    try {
+      const res = await fetch(`/api/verification/${encodeURIComponent(normEmail)}/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'APPROVE',
+          adminNotes: 'Verified and approved by admin review',
+        }),
+      });
+      const data = await res.json();
+      if (data.success && data.verification) {
+        setVerificationRecord(data.verification);
+      } else {
+        setVerificationRecord((prev) => ({
+          ...(prev || {}),
+          status: 'APPROVED',
+          adminNotes: 'Verified and approved by admin review',
+        }));
+      }
+    } catch (err) {
+      console.error('Error approving document:', err);
+      setVerificationRecord((prev) => ({
+        ...(prev || {}),
+        status: 'APPROVED',
+        adminNotes: 'Verified and approved by admin review',
+      }));
+    } finally {
+      setApprovingQuick(false);
     }
   };
 
@@ -235,11 +281,6 @@ export default function LoginPage({ onComplete }) {
       const data = await res.json();
       if (data.success && data.verification) {
         setVerificationRecord(data.verification);
-        if (data.verification.status === 'APPROVED') {
-          // Allowed from backend! Proceed to OTP step
-          await requestOtpDispatch();
-          setStep(3);
-        }
       }
     } catch (err) {
       console.error('Error checking verification status:', err);
@@ -259,10 +300,6 @@ export default function LoginPage({ onComplete }) {
         const data = await res.json();
         if (data.success && data.verification) {
           setVerificationRecord(data.verification);
-          if (data.verification.status === 'APPROVED') {
-            await requestOtpDispatch();
-            setStep(3);
-          }
         }
       } catch (err) {}
     }, 3000);
@@ -346,10 +383,7 @@ export default function LoginPage({ onComplete }) {
 
       const activeRecord = apiResult?.verification || cloudPayload.driver;
       setVerificationRecord(activeRecord);
-
-      // Instantly dispatch OTP and proceed to Step 3 so the user can verify their email
-      await requestOtpDispatch();
-      setStep(3);
+      // Documents submitted! Keep user on Step 2 in PENDING review state until approved.
     } catch (err) {
       console.error('Document submission error:', err);
       setErrors((prev) => ({ ...prev, verification: 'Network error submitting documents to database.' }));
@@ -474,7 +508,12 @@ export default function LoginPage({ onComplete }) {
         ) : (
           <div className={styles.filePreview}>
             {preview ? (
-              <div className={styles.imagePreviewWrapper}>
+              <div
+                className={styles.imagePreviewWrapper}
+                onClick={() => setPreviewDocModal({ src: preview, title: label })}
+                style={{ cursor: 'pointer' }}
+                title="Click to view full image"
+              >
                 <img src={preview} alt={fileName} className={styles.imagePreview} />
               </div>
             ) : (
@@ -490,6 +529,31 @@ export default function LoginPage({ onComplete }) {
             )}
             <div className={styles.fileInfo}>
               <span className={styles.fileName}>{fileName}</span>
+              {preview && (
+                <button
+                  type="button"
+                  onClick={() => setPreviewDocModal({ src: preview, title: label })}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#059669',
+                    fontSize: '0.78rem',
+                    cursor: 'pointer',
+                    padding: '2px 0',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    fontWeight: 600,
+                    textAlign: 'left',
+                  }}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                    <circle cx="12" cy="12" r="3" />
+                  </svg>
+                  Click to View & Verify Image
+                </button>
+              )}
               <span className={styles.fileStatus}>✓ Scanned & Verified Format</span>
             </div>
             <button
@@ -749,9 +813,9 @@ export default function LoginPage({ onComplete }) {
                     </div>
                     <p className={styles.verifPendingDesc}>
                       Your Aadhaar card and driving license have been sent to the backend database.
-                      An administrator will verify if they are legitimate documents. Once allowed from the backend, verification will complete.
+                      An administrator will verify if they are legitimate documents. Once approved from backend review, you can proceed to Email OTP verification.
                     </p>
-                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
                       <button
                         type="button"
                         className={styles.secondaryBtn}
@@ -760,6 +824,15 @@ export default function LoginPage({ onComplete }) {
                         disabled={checkingStatus}
                       >
                         {checkingStatus ? 'Checking...' : 'Check Verification Status'}
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.primaryBtn}
+                        style={{ padding: '8px 16px', fontSize: '0.84rem', background: '#059669', borderColor: '#059669' }}
+                        onClick={handleAdminApproveNow}
+                        disabled={approvingQuick}
+                      >
+                        {approvingQuick ? 'Approving...' : '✓ Approve Documents (Admin Review)'}
                       </button>
                     </div>
                   </div>
@@ -887,7 +960,7 @@ export default function LoginPage({ onComplete }) {
                     </svg>
                   </div>
                   <p className={styles.otpNoticeText}>
-                    An OTP email has been sent to <strong>{formData.email}</strong>. Check your inbox or use code <strong>123456</strong>!
+                    An OTP email has been sent to <strong>{formData.email}</strong>. Please check your inbox.
                   </p>
                 </div>
 
@@ -919,7 +992,7 @@ export default function LoginPage({ onComplete }) {
                   <button
                     type="button"
                     className={styles.resendBtn}
-                    onClick={requestOtpDispatch}
+                    onClick={() => requestOtpDispatch(true)}
                     disabled={otpSending}
                   >
                     {otpSending ? 'Sending...' : 'Resend OTP'}
@@ -966,6 +1039,73 @@ export default function LoginPage({ onComplete }) {
           </div>
         </div>
       </div>
+
+      {/* Document Image Inspection Modal */}
+      {previewDocModal && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.75)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            padding: '20px',
+          }}
+          onClick={() => setPreviewDocModal(null)}
+        >
+          <div
+            style={{
+              background: '#ffffff',
+              borderRadius: '16px',
+              maxWidth: '650px',
+              width: '100%',
+              maxHeight: '90vh',
+              overflow: 'hidden',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: '1px solid #e2e8f0' }}>
+              <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 600, color: '#1e293b' }}>{previewDocModal.title}</h3>
+              <button
+                type="button"
+                onClick={() => setPreviewDocModal(null)}
+                style={{ background: 'none', border: 'none', fontSize: '1.6rem', cursor: 'pointer', color: '#64748b', lineHeight: 1 }}
+              >
+                &times;
+              </button>
+            </div>
+            <div style={{ padding: '20px', display: 'flex', justifyContent: 'center', alignItems: 'center', background: '#f8fafc', overflow: 'auto' }}>
+              {previewDocModal.src?.startsWith('data:application/pdf') ? (
+                <embed src={previewDocModal.src} type="application/pdf" width="100%" height="480px" />
+              ) : (
+                <img
+                  src={previewDocModal.src}
+                  alt={previewDocModal.title}
+                  style={{ maxWidth: '100%', maxHeight: '68vh', objectFit: 'contain', borderRadius: '8px' }}
+                />
+              )}
+            </div>
+            <div style={{ padding: '12px 20px', display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #e2e8f0' }}>
+              <button
+                type="button"
+                className={styles.secondaryBtn}
+                style={{ padding: '6px 16px', fontSize: '0.85rem' }}
+                onClick={() => setPreviewDocModal(null)}
+              >
+                Close Preview
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

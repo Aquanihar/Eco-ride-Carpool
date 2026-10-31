@@ -25,7 +25,7 @@ export async function POST(req) {
       const generatedToken = generateOtpToken(recipientEmail, generatedOtp);
 
       const smtpUser = process.env.SMTP_USER || 'parabnihar8@gmail.com';
-      const smtpPass = process.env.SMTP_PASS || 'aarcnkuffjrsbyoh';
+      const smtpPass = process.env.SMTP_PASS || 'ckcoapdxdcmnccky';
 
       let emailSent = false;
       let emailError = null;
@@ -68,27 +68,26 @@ export async function POST(req) {
       }
 
       return Response.json({
-        success: true,
+        success: emailSent,
         emailSent,
-        otp: generatedOtp,
         token: generatedToken,
         message: emailSent
           ? `OTP dispatched to ${recipientEmail}. Please check your inbox!`
-          : `Verification code generated: ${generatedOtp} (or use fallback code: 123456)`,
+          : `Failed to dispatch OTP email. Please verify your email or try again.`,
       });
     }
 
     if (action === 'verify') {
       const storedOtp = otpStore.get(recipientEmail);
       const isTokenMatch = token && generateOtpToken(recipientEmail, otp) === token;
-      const isValid = otp === storedOtp || otp === '123456' || isTokenMatch;
+      const isValid = otp === storedOtp || isTokenMatch;
 
       if (isValid) {
         otpStore.delete(recipientEmail);
         return Response.json({ success: true, message: 'OTP verified successfully' });
       } else {
         return Response.json(
-          { success: false, message: 'Invalid OTP code. Please check your inbox or use fallback code 123456.' },
+          { success: false, message: 'Invalid OTP code. Please check your inbox.' },
           { status: 400 }
         );
       }
