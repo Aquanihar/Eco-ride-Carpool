@@ -103,7 +103,7 @@ function loadVerificationsFromFile() {
   }
 }
 
-function saveVerificationsToFile() {
+export function saveVerificationsToFile() {
   try {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1069,13 +1069,22 @@ export async function dbCreateDocumentVerification(data) {
 
 function getRowTimestamp(r) {
   if (!r) return 0;
-  const tRev = r.driver?.reviewedAt ? new Date(r.driver.reviewedAt).getTime() : 0;
-  const tSub = r.driver?.submittedAt ? new Date(r.driver.submittedAt).getTime() : 0;
+  const tRev = (r.reviewedAt || r.driver?.reviewedAt) ? new Date(r.reviewedAt || r.driver?.reviewedAt).getTime() : 0;
+  const tSub = (r.submittedAt || r.driver?.submittedAt) ? new Date(r.submittedAt || r.driver?.submittedAt).getTime() : 0;
   const idMatch = (r.id || '').match(/_(\d{13})$/);
   const tId = idMatch ? parseInt(idMatch[1], 10) : 0;
   const tCreated = r.created_at ? new Date(r.created_at).getTime() : 0;
   const tUpdated = r.updated_at ? new Date(r.updated_at).getTime() : 0;
   return Math.max(tRev, tSub, tId, tCreated, tUpdated);
+}
+
+function cleanUserEmail(rawEmail, rawId) {
+  if (rawEmail && rawEmail.includes('@') && !rawEmail.startsWith('doc_')) {
+    return rawEmail.toLowerCase().trim();
+  }
+  const str = rawEmail || rawId || '';
+  const m = str.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+)/i);
+  return m ? m[1].toLowerCase().trim() : null;
 }
 
 export async function dbGetVerificationByEmail(email) {
@@ -1086,26 +1095,28 @@ export async function dbGetVerificationByEmail(email) {
   // Find all matching local records and pick the latest one
   const matchingLocal = [];
   for (const [, val] of memoryDB.verifications.entries()) {
-    if (val && (val.email || '').toLowerCase().trim() === normEmail) {
+    if (val && cleanUserEmail(val.email, val.id) === normEmail) {
       matchingLocal.push(val);
     }
   }
-  matchingLocal.sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0));
+  matchingLocal.sort((a, b) => getRowTimestamp(b) - getRowTimestamp(a));
   const localRec = matchingLocal[0] || null;
 
-  // 1. Check Supabase rides storage with timeout (primary cloud source)
+  // 1. Check Supabase rides storage with fast optimized query
   try {
     const { data: rows } = await withTimeout(
       supabase
         .from('rides')
-        .select('*')
-        .ilike('status', 'VERIFICATION_%'),
-      6000
+        .select('id, driver_id, status, created_at, updated_at, driver')
+        .ilike('status', 'VERIFICATION_%')
+        .order('created_at', { ascending: false })
+        .limit(60),
+      8000
     );
 
     if (rows && rows.length > 0) {
       const userRows = rows.filter(
-        (r) => r.driver && (r.driver.email || '').toLowerCase().trim() === normEmail
+        (r) => r.driver && cleanUserEmail(r.driver.email, r.id) === normEmail
       );
       if (userRows.length > 0) {
         userRows.sort((a, b) => getRowTimestamp(b) - getRowTimestamp(a));
@@ -1114,10 +1125,16 @@ export async function dbGetVerificationByEmail(email) {
           : latest.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
           : (latest.driver?.status || localRec?.status || 'PENDING');
 
-        const resolvedIdProof = latest.driver?.idProofBase64 || localRec?.idProofBase64 || '';
-        const resolvedIdProofName = latest.driver?.idProofName || localRec?.idProofName || 'Identity Document';
-        const resolvedDl = latest.driver?.drivingLicenseBase64 || localRec?.drivingLicenseBase64 || '';
-        const resolvedDlName = latest.driver?.drivingLicenseName || localRec?.drivingLicenseName || 'Driving License';
+        // Find newest row that has document photos
+        const docRow = userRows.find(
+          (r) => (r.driver?.idProofBase64 && r.driver.idProofBase64.length > 50) ||
+                 (r.driver?.drivingLicenseBase64 && r.driver.drivingLicenseBase64.length > 50)
+        ) || latest;
+
+        const resolvedIdProof = docRow.driver?.idProofBase64 || localRec?.idProofBase64 || '';
+        const resolvedIdProofName = docRow.driver?.idProofName || localRec?.idProofName || 'Identity Document';
+        const resolvedDl = docRow.driver?.drivingLicenseBase64 || localRec?.drivingLicenseBase64 || '';
+        const resolvedDlName = docRow.driver?.drivingLicenseName || localRec?.drivingLicenseName || 'Driving License';
 
         const rec = {
           ...(localRec || {}),
@@ -1135,32 +1152,9 @@ export async function dbGetVerificationByEmail(email) {
           adminNotes: latest.driver?.adminNotes || localRec?.adminNotes || '',
         };
         memoryDB.verifications.set(rec.id, rec);
+        memoryDB.verifications.set(normEmail, rec);
         return rec;
       }
-    }
-  } catch (err) {}
-
-  // 2. Check dedicated verifications table with timeout
-  try {
-    const { data } = await withTimeout(
-      supabase
-        .from('verifications')
-        .select('*')
-        .eq('email', normEmail)
-        .order('submittedAt', { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-      4000
-    );
-    if (data) {
-      const merged = {
-        ...(localRec || {}),
-        ...data,
-        idProofBase64: data.idProofBase64 || localRec?.idProofBase64 || '',
-        drivingLicenseBase64: data.drivingLicenseBase64 || localRec?.drivingLicenseBase64 || '',
-      };
-      memoryDB.verifications.set(merged.id || normEmail, merged);
-      return merged;
     }
   } catch (err) {}
 
@@ -1174,27 +1168,31 @@ export async function dbGetAllVerifications() {
 
   // 1. Preload local disk/memory records
   for (const [, val] of memoryDB.verifications.entries()) {
-    if (val && val.email) {
-      const email = val.email.toLowerCase().trim();
-      if (!userMap.has(email)) userMap.set(email, []);
-      userMap.get(email).push({ ...val });
+    if (val) {
+      const email = cleanUserEmail(val.email, val.id);
+      if (email) {
+        if (!userMap.has(email)) userMap.set(email, []);
+        userMap.get(email).push({ ...val, email });
+      }
     }
   }
 
-  // 2. Check Supabase rides database with timeout
+  // 2. Check Supabase rides database with fast optimized query
   try {
     const { data: rideRows } = await withTimeout(
       supabase
         .from('rides')
-        .select('*')
-        .ilike('status', 'VERIFICATION_%'),
-      6000
+        .select('id, driver_id, status, created_at, updated_at, driver')
+        .ilike('status', 'VERIFICATION_%')
+        .order('created_at', { ascending: false })
+        .limit(60),
+      8000
     );
 
     if (rideRows && rideRows.length > 0) {
       rideRows.forEach((r) => {
-        if (r.driver && (r.driver.type === 'DOC_VERIFICATION' || r.driver.email)) {
-          const email = (r.driver.email || '').toLowerCase().trim();
+        if (r.driver) {
+          const email = cleanUserEmail(r.driver.email, r.id);
           if (email) {
             const status = r.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
               : r.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
@@ -1202,6 +1200,7 @@ export async function dbGetAllVerifications() {
             const rowRec = {
               ...r.driver,
               id: r.driver.id || r.id,
+              email,
               status,
               rowId: r.id,
               submittedAt: r.driver?.submittedAt || r.created_at,
@@ -1216,26 +1215,6 @@ export async function dbGetAllVerifications() {
     }
   } catch (err) {}
 
-  // 3. Check dedicated verifications table with timeout
-  try {
-    const { data } = await withTimeout(
-      supabase
-        .from('verifications')
-        .select('*')
-        .order('submittedAt', { ascending: false }),
-      2000
-    );
-    if (data && data.length > 0) {
-      data.forEach((d) => {
-        if (d && d.email) {
-          const email = d.email.toLowerCase().trim();
-          if (!userMap.has(email)) userMap.set(email, []);
-          userMap.get(email).push({ ...d });
-        }
-      });
-    }
-  } catch (err) {}
-
   // Consolidate exactly ONE authoritative entry per user email
   const consolidatedList = [];
   userMap.forEach((records, email) => {
@@ -1243,7 +1222,7 @@ export async function dbGetAllVerifications() {
     records.sort((a, b) => getRowTimestamp(b) - getRowTimestamp(a));
     const latest = records[0];
 
-    // Find newest record with uploaded document photos
+    // Find newest record that has photo/document data
     const docRecord = records.find(
       (r) => (r.idProofBase64 && r.idProofBase64.length > 50) ||
              (r.drivingLicenseBase64 && r.drivingLicenseBase64.length > 50)
@@ -1279,6 +1258,12 @@ export async function dbGetAllVerifications() {
       reviewedAt: finalStatus === 'PENDING' ? null : (latest.reviewedAt || docRecord.reviewedAt),
       adminNotes: latest.adminNotes || docRecord.adminNotes || '',
     });
+  });
+
+  // Keep memory cache updated with newest consolidated data
+  consolidatedList.forEach((rec) => {
+    memoryDB.verifications.set(rec.id, rec);
+    memoryDB.verifications.set(rec.email, rec);
   });
 
   return consolidatedList.sort(

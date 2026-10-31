@@ -140,13 +140,22 @@ function AdminContent() {
 
   const getRowTimestamp = (r) => {
     if (!r) return 0;
-    const tRev = r.driver?.reviewedAt ? new Date(r.driver.reviewedAt).getTime() : 0;
-    const tSub = r.driver?.submittedAt ? new Date(r.driver.submittedAt).getTime() : 0;
+    const tRev = (r.reviewedAt || r.driver?.reviewedAt) ? new Date(r.reviewedAt || r.driver?.reviewedAt).getTime() : 0;
+    const tSub = (r.submittedAt || r.driver?.submittedAt) ? new Date(r.submittedAt || r.driver?.submittedAt).getTime() : 0;
     const idMatch = (r.id || '').match(/_(\d{13})$/);
     const tId = idMatch ? parseInt(idMatch[1], 10) : 0;
     const tCreated = r.created_at ? new Date(r.created_at).getTime() : 0;
     const tUpdated = r.updated_at ? new Date(r.updated_at).getTime() : 0;
     return Math.max(tRev, tSub, tId, tCreated, tUpdated);
+  };
+
+  const cleanUserEmail = (rawEmail, rawId) => {
+    if (rawEmail && rawEmail.includes('@') && !rawEmail.startsWith('doc_')) {
+      return rawEmail.toLowerCase().trim();
+    }
+    const str = rawEmail || rawId || '';
+    const m = str.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+)/i);
+    return m ? m[1].toLowerCase().trim() : null;
   };
 
   const fetchVerifications = useCallback(async (silent = false) => {
@@ -161,9 +170,11 @@ function AdminContent() {
           const data = await res.json();
           if (data.success && data.verifications && Array.isArray(data.verifications)) {
             data.verifications.forEach((v) => {
-              if (v && v.email) {
-                const normEmail = v.email.toLowerCase().trim();
-                userMap.set(normEmail, { ...v, id: v.id || ('doc_' + normEmail.replace(/[^a-z0-9]/g, '_')) });
+              if (v) {
+                const normEmail = cleanUserEmail(v.email, v.id);
+                if (normEmail) {
+                  userMap.set(normEmail, { ...v, email: normEmail, id: v.id || ('doc_' + normEmail.replace(/[^a-z0-9]/g, '_')) });
+                }
               }
             });
           }
@@ -172,48 +183,67 @@ function AdminContent() {
         console.error('API verification fetch error:', apiErr);
       }
 
-      // 2. Also merge Supabase entries with an 8s safety timeout to avoid hanging
+      // 2. Also merge Supabase entries with fast selective query (avoids statement timeout)
       try {
         const timeoutPromise = new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Supabase request timeout')), 8000)
         );
         const queryPromise = supabase
           .from('rides')
-          .select('*')
+          .select('id, driver_id, status, created_at, updated_at, driver')
           .ilike('status', 'VERIFICATION_%')
           .order('created_at', { ascending: false })
-          .limit(50);
+          .limit(60);
 
         const { data: rideRows } = await Promise.race([queryPromise, timeoutPromise]);
 
         if (rideRows && rideRows.length > 0) {
           rideRows.forEach((r) => {
-            if (r.driver && (r.driver.type === 'DOC_VERIFICATION' || r.driver.email)) {
-              const userEmail = (r.driver.email || '').toLowerCase().trim();
+            if (r.driver) {
+              const userEmail = cleanUserEmail(r.driver.email, r.id);
               if (userEmail) {
                 const existing = userMap.get(userEmail);
                 const status = r.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
                   : r.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
                   : (r.driver?.status || existing?.status || 'PENDING');
 
-                const resolvedIdProof = existing?.idProofBase64 || r.driver?.idProofBase64 || '';
-                const resolvedIdProofName = existing?.idProofName || r.driver?.idProofName || 'Identity Document';
-                const resolvedDl = existing?.drivingLicenseBase64 || r.driver?.drivingLicenseBase64 || '';
-                const resolvedDlName = existing?.drivingLicenseName || r.driver?.drivingLicenseName || 'Driving License';
-
-                const existingSubTime = new Date(existing?.submittedAt || 0).getTime();
                 const rSubTime = new Date(r.driver?.submittedAt || r.created_at || 0).getTime();
+                const existingSubTime = new Date(existing?.submittedAt || 0).getTime();
+
+                // Select the NEWEST document photos: if Supabase row is newer and has photos, prefer Supabase photos!
+                const rHasPhotos = (r.driver?.idProofBase64 && r.driver.idProofBase64.length > 50) ||
+                                   (r.driver?.drivingLicenseBase64 && r.driver.drivingLicenseBase64.length > 50);
+                const existingHasPhotos = (existing?.idProofBase64 && existing.idProofBase64.length > 50) ||
+                                          (existing?.drivingLicenseBase64 && existing.drivingLicenseBase64.length > 50);
+
+                let resolvedIdProof = '';
+                let resolvedIdProofName = 'Identity Document';
+                let resolvedDl = '';
+                let resolvedDlName = 'Driving License';
+
+                if (rHasPhotos && (!existingHasPhotos || rSubTime >= existingSubTime)) {
+                  resolvedIdProof = r.driver?.idProofBase64 || existing?.idProofBase64 || '';
+                  resolvedIdProofName = r.driver?.idProofName || existing?.idProofName || 'Identity Document';
+                  resolvedDl = r.driver?.drivingLicenseBase64 || existing?.drivingLicenseBase64 || '';
+                  resolvedDlName = r.driver?.drivingLicenseName || existing?.drivingLicenseName || 'Driving License';
+                } else {
+                  resolvedIdProof = existing?.idProofBase64 || r.driver?.idProofBase64 || '';
+                  resolvedIdProofName = existing?.idProofName || r.driver?.idProofName || 'Identity Document';
+                  resolvedDl = existing?.drivingLicenseBase64 || r.driver?.drivingLicenseBase64 || '';
+                  resolvedDlName = existing?.drivingLicenseName || r.driver?.drivingLicenseName || 'Driving License';
+                }
+
                 const latestSubmittedAt = existingSubTime >= rSubTime
                   ? (existing?.submittedAt || r.created_at)
                   : (r.driver?.submittedAt || r.created_at);
 
-                // If user uploaded new documents locally, retain PENDING status
+                // If user uploaded new documents after review, status is PENDING
                 const finalStatus = (existingSubTime > rSubTime && existing?.status) ? existing.status : status;
 
                 userMap.set(userEmail, {
                   ...(existing || {}),
                   ...r.driver,
-                  id: existing?.id || r.driver.id || r.id,
+                  id: (rSubTime >= existingSubTime ? r.id : existing?.id) || r.driver.id || r.id,
                   email: userEmail,
                   status: finalStatus,
                   rowId: r.id,
@@ -272,13 +302,13 @@ function AdminContent() {
     setActionInProgress((prev) => ({ ...prev, [id]: true }));
 
     const item = verifications.find((v) => v.id === id || v.email === id);
-    const normEmail = (item?.email || id).toLowerCase().trim();
+    const normEmail = cleanUserEmail(item?.email, id) || (item?.email || id).toLowerCase().trim();
     const updateId = 'doc_' + normEmail.replace(/[^a-z0-9]/g, '_');
 
     // Optimistically update UI
     setVerifications((prev) =>
       prev.map((v) =>
-        v.id === id || v.email?.toLowerCase().trim() === normEmail
+        v.id === id || cleanUserEmail(v.email, v.id) === normEmail
           ? { ...v, status, adminNotes: note, reviewedAt }
           : v
       )
@@ -288,6 +318,7 @@ function AdminContent() {
       const updatedDriver = {
         ...(item || {}),
         id: updateId,
+        email: normEmail,
         status,
         adminNotes: note,
         reviewedAt,
