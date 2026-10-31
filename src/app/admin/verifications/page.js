@@ -191,7 +191,7 @@ function AdminContent() {
   }, [fetchVerifications]);
 
   // Load document image on demand when inspected or downloaded
-  const fetchDocOnDemand = async (item, docType) => {
+  const fetchDocOnDemand = useCallback(async (item, docType) => {
     const field = docType === 'idProof' ? 'idProofBase64' : 'drivingLicenseBase64';
     const cached = loadedDocs[item.id];
     if (cached && cached[field]) {
@@ -222,7 +222,17 @@ function AdminContent() {
       setLoadingDocs((prev) => ({ ...prev, [loadKey]: false }));
     }
     return '';
-  };
+  }, [loadedDocs]);
+
+  // Pre-fetch document thumbnails in background for cards so previews display cleanly
+  useEffect(() => {
+    if (!verifications || verifications.length === 0) return;
+    verifications.forEach((item) => {
+      if (!loadedDocs[item.id]) {
+        fetchDocOnDemand(item, 'idProof');
+      }
+    });
+  }, [verifications, loadedDocs, fetchDocOnDemand]);
 
   const handleOpenPreview = async (item, docType) => {
     const isIdProof = docType === 'idProof';
