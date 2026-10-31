@@ -346,24 +346,11 @@ export default function LoginPage({ onComplete }) {
       const timestamp = Date.now();
       const updateId = `doc_${normEmail.replace(/[^a-z0-9]/g, '_')}_${timestamp}`;
 
-      // 1. Direct write to Supabase cloud database with all required schema fields
-      const cloudPayload = {
-        id: updateId,
-        driver_id: updateId,
-        origin: 'Verification Portal',
-        destination: 'Document Verification',
-        origin_latitude: 0,
-        origin_longitude: 0,
-        destination_latitude: 0,
-        destination_longitude: 0,
-        departure_date: now.toISOString().split('T')[0],
-        departure_time: '00:00',
-        total_seats: 1,
-        available_seats: 1,
-        price_per_seat: 0,
-        status: 'VERIFICATION_PENDING',
-        driver: {
-          type: 'DOC_VERIFICATION',
+      // Submit documents to backend API route (which writes to Supabase with server admin role)
+      const res = await fetch('/api/verifications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           id: updateId,
           email: normEmail,
           fullName: formData.fullName.trim(),
@@ -372,51 +359,19 @@ export default function LoginPage({ onComplete }) {
           idProofName: formData.idProofName,
           drivingLicenseBase64: formData.drivingLicensePreview,
           drivingLicenseName: formData.drivingLicenseName,
-          status: 'PENDING',
-          adminNotes: '',
-          submittedAt: now.toISOString(),
-          reviewedAt: null,
-        },
-        created_at: now.toISOString(),
-        updated_at: now.toISOString(),
-      };
+        }),
+      });
 
-      try {
-        await supabase.from('rides').upsert([cloudPayload], { onConflict: 'id' });
-      } catch (sbErr) {
-        console.error('Direct Supabase submission error:', sbErr);
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Failed to submit documents');
       }
 
-      // 2. Also send to Carpool API backend
-      let apiResult = null;
-      try {
-        const res = await fetch('/api/verification', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: updateId,
-            email: normEmail,
-            fullName: formData.fullName.trim(),
-            phone: formData.phone.trim(),
-            idProofBase64: formData.idProofPreview,
-            idProofName: formData.idProofName,
-            drivingLicenseBase64: formData.drivingLicensePreview,
-            drivingLicenseName: formData.drivingLicenseName,
-          }),
-        });
-        if (res.ok) {
-          apiResult = await res.json();
-        }
-      } catch (apiErr) {
-        console.error('API submission error:', apiErr);
-      }
-
-      const activeRecord = apiResult?.verification || cloudPayload.driver;
-      setVerificationRecord(activeRecord);
+      setVerificationRecord(data.verification);
       // Documents submitted! Keep user on Step 2 in PENDING review state until approved.
     } catch (err) {
       console.error('Document submission error:', err);
-      setErrors((prev) => ({ ...prev, verification: 'Network error submitting documents to database.' }));
+      setErrors((prev) => ({ ...prev, verification: err.message || 'Network error submitting documents to database.' }));
     } finally {
       setDocVerifying(false);
     }

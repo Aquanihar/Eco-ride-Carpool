@@ -1012,23 +1012,17 @@ export async function dbCreateDocumentVerification(data) {
   memoryDB.verifications.set(id, record);
   if (normEmail) memoryDB.verifications.set(normEmail, record);
 
-  // Try storing in dedicated Supabase 'verifications' table with server-side admin client
-  try {
-    const { data: inserted, error } = await withTimeout(
-      supabaseAdmin
-        .from('verifications')
-        .upsert([record], { onConflict: 'id' })
-        .select()
-        .single(),
-      5000
-    );
-    if (inserted && !error) {
-      memoryDB.verifications.set(id, inserted);
-      if (normEmail) memoryDB.verifications.set(normEmail, inserted);
-    }
-  } catch (err) {}
+  // Clean up any previous verification row for this user email in rides table to prevent duplicates
+  if (normEmail) {
+    try {
+      await supabaseAdmin
+        .from('rides')
+        .delete()
+        .or(`id.ilike.doc_${normEmail.replace(/[^a-z0-9]/g, '_')}%,driver->>email.eq.${normEmail}`);
+    } catch (cleanErr) {}
+  }
 
-  // Store in Supabase rides table
+  // Store new submission in Supabase rides table
   try {
     const now = new Date();
     const payload = {
@@ -1354,29 +1348,19 @@ export async function dbUpdateVerificationStatus(idOrEmail, action, adminNotes =
     : 'Verified successfully.';
   const finalNotes = adminNotes || defaultNotes;
 
-  // 1. Find all matching verification rows in Supabase rides
+  // 1. Find the target verification row in Supabase rides
   let matchedRows = [];
   try {
     const { data: rows } = await withTimeout(
       supabaseAdmin
         .from('rides')
         .select('id, driver_id, status, created_at, updated_at, driver')
-        .ilike('status', 'VERIFICATION_%')
-        .order('created_at', { ascending: false })
-        .limit(100),
-      10000
+        .or(`id.eq.${idOrEmail},driver_id.eq.${idOrEmail},driver->>email.eq.${normEmail}`),
+      5000
     );
 
     if (rows && rows.length > 0) {
-      matchedRows = rows.filter((r) => {
-        if (r.id === idOrEmail || r.driver_id === idOrEmail) return true;
-        if (r.driver) {
-          const em = cleanUserEmail(r.driver.email, r.id);
-          if (normEmail && em === normEmail) return true;
-          if (r.driver.id === idOrEmail) return true;
-        }
-        return false;
-      });
+      matchedRows = rows;
     }
   } catch (err) {
     console.error('dbUpdateVerificationStatus find rows error:', err);
