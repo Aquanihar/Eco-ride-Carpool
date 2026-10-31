@@ -322,14 +322,6 @@ export default function LoginPage({ onComplete }) {
     return () => clearInterval(interval);
   }, [step, verificationRecord?.status, formData.email]);
 
-  // Ensure automatic transition to Step 3 if status is APPROVED and user hasn't selected new files to submit
-  useEffect(() => {
-    if (step === 2 && verificationRecord?.status === 'APPROVED' && !formData.idProof && !formData.drivingLicense) {
-      requestOtpDispatch();
-      setStep(3);
-    }
-  }, [step, verificationRecord?.status, formData.idProof, formData.drivingLicense]);
-
   const handleProceedToOtp = async () => {
     if (!validateStep2()) return;
 
@@ -919,7 +911,7 @@ export default function LoginPage({ onComplete }) {
                     Back
                   </button>
 
-                  {(!verificationRecord || verificationRecord.status === 'REJECTED' || (formData.idProof && formData.drivingLicense && verificationRecord.status !== 'PENDING')) ? (
+                  {(!verificationRecord || verificationRecord.status === 'REJECTED' || (formData.idProof && formData.drivingLicense)) ? (
                     <button
                       type="button"
                       className={`${styles.primaryBtn} ${docVerifying ? styles.btnLoading : ''}`}
@@ -950,10 +942,19 @@ export default function LoginPage({ onComplete }) {
                       {checkingStatus ? 'Checking Backend...' : 'Check Backend Status'}
                     </button>
                   ) : (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#059669', fontWeight: 600, fontSize: '0.9rem', padding: '10px 16px' }}>
-                      <span className={styles.spinner} style={{ borderColor: '#059669', borderTopColor: 'transparent', width: '18px', height: '18px' }} />
-                      Verified! Redirecting to Email OTP...
-                    </div>
+                    <button
+                      type="button"
+                      className={styles.primaryBtn}
+                      onClick={async () => {
+                        await requestOtpDispatch();
+                        setStep(3);
+                      }}
+                    >
+                      Proceed to Email OTP
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="9 18 15 12 9 6" />
+                      </svg>
+                    </button>
                   )}
                 </div>
 
