@@ -152,7 +152,7 @@ function AdminContent() {
   const fetchVerifications = useCallback(async (silent = false) => {
     try {
       if (!silent) setLoading(true);
-      const subMap = new Map();
+      const userMap = new Map();
 
       // 1. Fetch from authoritative API route first (has local persistence + photos)
       try {
@@ -161,9 +161,9 @@ function AdminContent() {
           const data = await res.json();
           if (data.success && data.verifications && Array.isArray(data.verifications)) {
             data.verifications.forEach((v) => {
-              if (v && (v.id || v.email)) {
-                const subId = v.id || v.email.toLowerCase().trim();
-                subMap.set(subId, { ...v, id: subId });
+              if (v && v.email) {
+                const normEmail = v.email.toLowerCase().trim();
+                userMap.set(normEmail, { ...v, id: v.id || ('doc_' + normEmail.replace(/[^a-z0-9]/g, '_')) });
               }
             });
           }
@@ -172,10 +172,10 @@ function AdminContent() {
         console.error('API verification fetch error:', apiErr);
       }
 
-      // 2. Also merge Supabase entries with a 12s safety timeout to avoid hanging
+      // 2. Also merge Supabase entries with an 8s safety timeout to avoid hanging
       try {
         const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Supabase request timeout')), 12000)
+          setTimeout(() => reject(new Error('Supabase request timeout')), 8000)
         );
         const queryPromise = supabase
           .from('rides')
@@ -189,46 +189,53 @@ function AdminContent() {
         if (rideRows && rideRows.length > 0) {
           rideRows.forEach((r) => {
             if (r.driver && (r.driver.type === 'DOC_VERIFICATION' || r.driver.email)) {
-              const recId = r.driver.id || r.id;
-              const existing = subMap.get(recId);
-              const status = r.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
-                : r.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
-                : (r.driver?.status || existing?.status || 'PENDING');
+              const userEmail = (r.driver.email || '').toLowerCase().trim();
+              if (userEmail) {
+                const existing = userMap.get(userEmail);
+                const status = r.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
+                  : r.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
+                  : (r.driver?.status || existing?.status || 'PENDING');
 
-              const resolvedIdProof = r.driver?.idProofBase64 || existing?.idProofBase64 || '';
-              const resolvedIdProofName = r.driver?.idProofName || existing?.idProofName || 'Identity Document';
-              const resolvedDl = r.driver?.drivingLicenseBase64 || existing?.drivingLicenseBase64 || '';
-              const resolvedDlName = r.driver?.drivingLicenseName || existing?.drivingLicenseName || 'Driving License';
+                const resolvedIdProof = existing?.idProofBase64 || r.driver?.idProofBase64 || '';
+                const resolvedIdProofName = existing?.idProofName || r.driver?.idProofName || 'Identity Document';
+                const resolvedDl = existing?.drivingLicenseBase64 || r.driver?.drivingLicenseBase64 || '';
+                const resolvedDlName = existing?.drivingLicenseName || r.driver?.drivingLicenseName || 'Driving License';
 
-              subMap.set(recId, {
-                ...(existing || {}),
-                ...r.driver,
-                id: recId,
-                status,
-                rowId: r.id,
-                idProofBase64: resolvedIdProof,
-                idProofName: resolvedIdProofName,
-                drivingLicenseBase64: resolvedDl,
-                drivingLicenseName: resolvedDlName,
-                submittedAt: r.driver?.submittedAt || existing?.submittedAt || r.created_at,
-                reviewedAt: r.driver?.reviewedAt || existing?.reviewedAt || (status !== 'PENDING' ? r.updated_at : null),
-                adminNotes: r.driver?.adminNotes || existing?.adminNotes || '',
-              });
+                const existingSubTime = new Date(existing?.submittedAt || 0).getTime();
+                const rSubTime = new Date(r.driver?.submittedAt || r.created_at || 0).getTime();
+                const latestSubmittedAt = existingSubTime >= rSubTime
+                  ? (existing?.submittedAt || r.created_at)
+                  : (r.driver?.submittedAt || r.created_at);
+
+                // If user uploaded new documents locally, retain PENDING status
+                const finalStatus = (existingSubTime > rSubTime && existing?.status) ? existing.status : status;
+
+                userMap.set(userEmail, {
+                  ...(existing || {}),
+                  ...r.driver,
+                  id: existing?.id || r.driver.id || r.id,
+                  email: userEmail,
+                  status: finalStatus,
+                  rowId: r.id,
+                  idProofBase64: resolvedIdProof,
+                  idProofName: resolvedIdProofName,
+                  drivingLicenseBase64: resolvedDl,
+                  drivingLicenseName: resolvedDlName,
+                  submittedAt: latestSubmittedAt,
+                  reviewedAt: r.driver?.reviewedAt || existing?.reviewedAt || (finalStatus !== 'PENDING' ? r.updated_at : null),
+                  adminNotes: r.driver?.adminNotes || existing?.adminNotes || '',
+                });
+              }
             }
           });
         }
       } catch (sbErr) {
-        // Supabase error or timeout; backend API data in subMap is retained
+        // Supabase error or timeout; backend API data in userMap is retained
       }
 
-      const list = Array.from(subMap.values());
-      setVerifications(
-        list.sort(
-          (a, b) =>
-            new Date(b.submittedAt || b.reviewedAt || 0) -
-            new Date(a.submittedAt || a.reviewedAt || 0)
-        )
-      );
+      const list = Array.from(userMap.values());
+      const sorted = list.sort((a, b) => getRowTimestamp(b) - getRowTimestamp(a));
+      setVerifications(sorted);
     } catch (err) {
       console.error('Failed to fetch verifications:', err);
     } finally {
@@ -238,7 +245,7 @@ function AdminContent() {
 
   useEffect(() => {
     fetchVerifications();
-    const interval = setInterval(() => fetchVerifications(true), 4000);
+    const interval = setInterval(() => fetchVerifications(true), 8000);
 
     const channel = supabase
       .channel('realtime_admin_verifications')
@@ -266,7 +273,7 @@ function AdminContent() {
 
     const item = verifications.find((v) => v.id === id || v.email === id);
     const normEmail = (item?.email || id).toLowerCase().trim();
-    const updateId = `doc_${normEmail.replace(/[^a-z0-9]/g, '_')}`;
+    const updateId = 'doc_' + normEmail.replace(/[^a-z0-9]/g, '_');
 
     // Optimistically update UI
     setVerifications((prev) =>
@@ -321,15 +328,15 @@ function AdminContent() {
 
       // 2. Also call API route
       try {
-        await fetch(`/api/verification/${encodeURIComponent(id)}/review`, {
+        await fetch('/api/verification/' + encodeURIComponent(item?.id || normEmail) + '/review', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action, adminNotes: note }),
         });
       } catch (e) {}
 
-      // Refresh to confirm live state from database
-      await fetchVerifications();
+      // Refresh to confirm live state from database silently without loading spinner jump
+      await fetchVerifications(true);
     } catch (err) {
       console.error('Error updating review:', err);
       alert('Error updating review status.');
@@ -361,7 +368,7 @@ function AdminContent() {
             </p>
           </div>
           <div className={styles.headerActions}>
-            <button className={styles.refreshBtn} onClick={fetchVerifications} disabled={loading}>
+            <button className={styles.refreshBtn} onClick={() => fetchVerifications(false)} disabled={loading}>
               <RefreshCw size={16} className={loading ? 'spin' : ''} /> Refresh
             </button>
           </div>

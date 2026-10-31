@@ -111,13 +111,14 @@ function saveVerificationsToFile() {
     const list = Array.from(memoryDB.verifications.values());
     fs.writeFileSync(VERIFICATIONS_FILE, JSON.stringify(list, null, 2), 'utf8');
 
-    // Also mirror to raahi-admin-portal if present
+    // Only mirror to raahi-admin-portal if that directory actually exists
     const portalDataDir = path.resolve(process.cwd(), '..', 'raahi-admin-portal', 'data');
-    const portalFile = path.join(portalDataDir, 'verifications.json');
-    if (!fs.existsSync(portalDataDir)) {
-      try { fs.mkdirSync(portalDataDir, { recursive: true }); } catch (err) {}
+    if (fs.existsSync(portalDataDir)) {
+      try {
+        const portalFile = path.join(portalDataDir, 'verifications.json');
+        fs.writeFileSync(portalFile, JSON.stringify(list, null, 2), 'utf8');
+      } catch (err) {}
     }
-    fs.writeFileSync(portalFile, JSON.stringify(list, null, 2), 'utf8');
   } catch (e) {
     console.error('Error saving verifications to file:', e.message);
   }
@@ -1134,7 +1135,6 @@ export async function dbGetVerificationByEmail(email) {
           adminNotes: latest.driver?.adminNotes || localRec?.adminNotes || '',
         };
         memoryDB.verifications.set(rec.id, rec);
-        saveVerificationsToFile();
         return rec;
       }
     }
@@ -1160,7 +1160,6 @@ export async function dbGetVerificationByEmail(email) {
         drivingLicenseBase64: data.drivingLicenseBase64 || localRec?.drivingLicenseBase64 || '',
       };
       memoryDB.verifications.set(merged.id || normEmail, merged);
-      saveVerificationsToFile();
       return merged;
     }
   } catch (err) {}
@@ -1171,13 +1170,14 @@ export async function dbGetVerificationByEmail(email) {
 
 export async function dbGetAllVerifications() {
   loadVerificationsFromFile();
-  const subMap = new Map();
+  const userMap = new Map();
 
-  // 1. Preload local disk/memory records (all submissions preserved)
-  for (const [key, val] of memoryDB.verifications.entries()) {
-    if (val && (val.id || val.email)) {
-      const subId = val.id || key;
-      subMap.set(subId, { ...val, id: subId });
+  // 1. Preload local disk/memory records
+  for (const [, val] of memoryDB.verifications.entries()) {
+    if (val && val.email) {
+      const email = val.email.toLowerCase().trim();
+      if (!userMap.has(email)) userMap.set(email, []);
+      userMap.get(email).push({ ...val });
     }
   }
 
@@ -1194,26 +1194,23 @@ export async function dbGetAllVerifications() {
     if (rideRows && rideRows.length > 0) {
       rideRows.forEach((r) => {
         if (r.driver && (r.driver.type === 'DOC_VERIFICATION' || r.driver.email)) {
-          const recId = r.driver.id || r.id;
-          const existing = subMap.get(recId);
-          const status = r.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
-            : r.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
-            : (r.driver?.status || existing?.status || 'PENDING');
-
-          subMap.set(recId, {
-            ...(existing || {}),
-            ...r.driver,
-            id: recId,
-            status,
-            rowId: r.id,
-            idProofBase64: r.driver?.idProofBase64 || existing?.idProofBase64 || '',
-            idProofName: r.driver?.idProofName || existing?.idProofName || 'Identity Document',
-            drivingLicenseBase64: r.driver?.drivingLicenseBase64 || existing?.drivingLicenseBase64 || '',
-            drivingLicenseName: r.driver?.drivingLicenseName || existing?.drivingLicenseName || 'Driving License',
-            submittedAt: r.driver?.submittedAt || existing?.submittedAt || r.created_at,
-            reviewedAt: r.driver?.reviewedAt || existing?.reviewedAt || (status !== 'PENDING' ? r.updated_at : null),
-            adminNotes: r.driver?.adminNotes || existing?.adminNotes || '',
-          });
+          const email = (r.driver.email || '').toLowerCase().trim();
+          if (email) {
+            const status = r.status === 'VERIFICATION_APPROVED' ? 'APPROVED'
+              : r.status === 'VERIFICATION_REJECTED' ? 'REJECTED'
+              : (r.driver?.status || 'PENDING');
+            const rowRec = {
+              ...r.driver,
+              id: r.driver.id || r.id,
+              status,
+              rowId: r.id,
+              submittedAt: r.driver?.submittedAt || r.created_at,
+              reviewedAt: r.driver?.reviewedAt || (status !== 'PENDING' ? r.updated_at : null),
+              adminNotes: r.driver?.adminNotes || '',
+            };
+            if (!userMap.has(email)) userMap.set(email, []);
+            userMap.get(email).push(rowRec);
+          }
         }
       });
     }
@@ -1230,28 +1227,62 @@ export async function dbGetAllVerifications() {
     );
     if (data && data.length > 0) {
       data.forEach((d) => {
-        if (d && (d.id || d.email)) {
-          const recId = d.id || `doc_${d.email.replace(/[^a-z0-9]/g, '_')}`;
-          const existing = subMap.get(recId);
-          subMap.set(recId, {
-            ...(existing || {}),
-            ...d,
-            id: recId,
-            idProofBase64: d.idProofBase64 || existing?.idProofBase64 || '',
-            drivingLicenseBase64: d.drivingLicenseBase64 || existing?.drivingLicenseBase64 || '',
-          });
+        if (d && d.email) {
+          const email = d.email.toLowerCase().trim();
+          if (!userMap.has(email)) userMap.set(email, []);
+          userMap.get(email).push({ ...d });
         }
       });
     }
   } catch (err) {}
 
-  const all = Array.from(subMap.values());
-  all.forEach((rec) => memoryDB.verifications.set(rec.id, rec));
-  saveVerificationsToFile();
-  return all.sort(
-    (a, b) =>
-      new Date(b.submittedAt || b.reviewedAt || 0) -
-      new Date(a.submittedAt || a.reviewedAt || 0)
+  // Consolidate exactly ONE authoritative entry per user email
+  const consolidatedList = [];
+  userMap.forEach((records, email) => {
+    // Sort submissions newest first
+    records.sort((a, b) => getRowTimestamp(b) - getRowTimestamp(a));
+    const latest = records[0];
+
+    // Find newest record with uploaded document photos
+    const docRecord = records.find(
+      (r) => (r.idProofBase64 && r.idProofBase64.length > 50) ||
+             (r.drivingLicenseBase64 && r.drivingLicenseBase64.length > 50)
+    ) || latest;
+
+    const idProofBase64 = docRecord.idProofBase64 || latest.idProofBase64 || '';
+    const idProofName = docRecord.idProofName || latest.idProofName || 'Identity Document';
+    const drivingLicenseBase64 = docRecord.drivingLicenseBase64 || latest.drivingLicenseBase64 || '';
+    const drivingLicenseName = docRecord.drivingLicenseName || latest.drivingLicenseName || 'Driving License';
+
+    // Status logic:
+    // If user submitted new documents after previous review, status is PENDING for new review
+    const latestSubTime = new Date(latest.submittedAt || 0).getTime();
+    const latestRevTime = latest.reviewedAt ? new Date(latest.reviewedAt).getTime() : 0;
+    let finalStatus = latest.status || 'PENDING';
+    if (latestRevTime && latestSubTime > latestRevTime) {
+      finalStatus = 'PENDING';
+    }
+
+    consolidatedList.push({
+      ...docRecord,
+      ...latest,
+      id: latest.id || ('doc_' + email.replace(/[^a-z0-9]/g, '_')),
+      email,
+      fullName: latest.fullName || docRecord.fullName || 'User',
+      phone: latest.phone || docRecord.phone || '',
+      status: finalStatus,
+      idProofBase64,
+      idProofName,
+      drivingLicenseBase64,
+      drivingLicenseName,
+      submittedAt: latest.submittedAt || docRecord.submittedAt || new Date().toISOString(),
+      reviewedAt: finalStatus === 'PENDING' ? null : (latest.reviewedAt || docRecord.reviewedAt),
+      adminNotes: latest.adminNotes || docRecord.adminNotes || '',
+    });
+  });
+
+  return consolidatedList.sort(
+    (a, b) => getRowTimestamp(b) - getRowTimestamp(a)
   );
 }
 
