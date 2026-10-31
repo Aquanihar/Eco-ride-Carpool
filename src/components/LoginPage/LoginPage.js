@@ -843,15 +843,6 @@ export default function LoginPage({ onComplete }) {
                       >
                         {checkingStatus ? 'Checking...' : 'Check Verification Status'}
                       </button>
-                      <button
-                        type="button"
-                        className={styles.primaryBtn}
-                        style={{ padding: '8px 16px', fontSize: '0.84rem', background: '#059669', borderColor: '#059669' }}
-                        onClick={handleAdminApproveNow}
-                        disabled={approvingQuick}
-                      >
-                        {approvingQuick ? 'Approving...' : '✓ Approve Documents (Admin Review)'}
-                      </button>
                     </div>
                   </div>
                 )}
@@ -881,26 +872,7 @@ export default function LoginPage({ onComplete }) {
                   </div>
                 )}
 
-                {/* If backend approved */}
-                {verificationRecord && verificationRecord.status === 'APPROVED' && (
-                  <div className={styles.verifSuccessBox}>
-                    <div className={styles.verifSuccessHeader}>
-                      <div className={styles.verifSuccessIcon}>
-                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-                          <polyline points="22 4 12 14.01 9 11.01" />
-                        </svg>
-                      </div>
-                      <div>
-                        <div className={styles.verifSuccessTitle}>Documents Allowed & Verified!</div>
-                        <div style={{ fontSize: '0.78rem', color: '#047857' }}>Backend approved successfully</div>
-                      </div>
-                    </div>
-                    <p className={styles.verifSuccessDesc}>
-                      Your Aadhaar card and driving license have been reviewed and verified by backend. You can now proceed to email OTP verification.
-                    </p>
-                  </div>
-                )}
+
 
                 <div className={styles.formActions}>
                   <button
