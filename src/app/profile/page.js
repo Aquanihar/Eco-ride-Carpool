@@ -171,7 +171,7 @@ function ProfileContent() {
                 <Star size={20} />
                 <span>My Rides</span>
               </a>
-              <button className={`${styles.actionCard} ${styles.logoutAction}`}>
+              <button className={`${styles.actionCard} ${styles.logoutAction}`} onClick={logoutUser} id="profile-quick-signout">
                 <LogOut size={20} />
                 <span>Sign Out</span>
               </button>

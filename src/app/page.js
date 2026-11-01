@@ -11,12 +11,26 @@ import LaunchScreen from '@/components/LaunchScreen/LaunchScreen';
 
 function HomePage() {
   const { isLoggedIn, loginUser } = useApp();
-  const [showLaunch, setShowLaunch] = useState(true);
+  const [showLaunch, setShowLaunch] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return !sessionStorage.getItem('raahi_launched');
+    }
+    return false;
+  });
 
   return (
     <>
       {showLaunch && (
-        <LaunchScreen onFinish={() => setShowLaunch(false)} />
+        <LaunchScreen
+          onFinish={() => {
+            if (typeof window !== 'undefined') {
+              try {
+                sessionStorage.setItem('raahi_launched', 'true');
+              } catch (e) {}
+            }
+            setShowLaunch(false);
+          }}
+        />
       )}
       {!isLoggedIn ? (
         <LoginPage onComplete={loginUser} />

@@ -230,6 +230,11 @@ export default function LoginPage({ onComplete }) {
   const handleNextStep = async () => {
     if (step === 1 && validateStep1()) {
       setVerificationRecord(null);
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('raahi_pending_name', formData.fullName.trim());
+        } catch (e) {}
+      }
       setStep(2);
     }
   };

@@ -21,9 +21,9 @@ export async function POST(req, { params }) {
     const auth = getAuthUser(req);
     const body = await req.json();
 
-    const passengerId = auth ? auth.id : body.passengerId || 'u_passenger_demo';
-    const passengerName = auth ? auth.name : body.passengerName || 'Passenger';
-    const passengerRating = auth ? auth.rating : body.passengerRating || 4.9;
+    const passengerId = body.passengerId || (auth ? auth.id : 'u_passenger_demo');
+    const passengerName = body.passengerName || body.passenger_name || (auth ? auth.name : 'Passenger');
+    const passengerRating = body.passengerRating || body.passenger_rating || (auth ? auth.rating : 4.9);
 
     const {
       seatsRequested = 1,

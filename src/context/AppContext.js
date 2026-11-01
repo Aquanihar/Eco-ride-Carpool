@@ -179,10 +179,18 @@ export function AppProvider({ children }) {
 
   /* Log in user & persist to localStorage */
   const loginUser = useCallback((userData) => {
+    let savedPendingName = '';
+    if (typeof window !== 'undefined') {
+      try {
+        savedPendingName = localStorage.getItem('raahi_pending_name') || '';
+      } catch (e) {}
+    }
+    const enteredName = (userData.fullName || userData.name || savedPendingName || user.name || 'User').trim();
     const updatedUser = {
       ...user,
       id: userData.id || (userData.email ? `u_${userData.email.replace(/[^a-zA-Z0-9]/g, '_')}` : `u_${Date.now()}`),
-      name: userData.fullName || userData.name || user.name,
+      name: enteredName,
+      fullName: enteredName,
       email: userData.email || user.email,
       phone: userData.phone || user.phone,
       isDriver: userData.isDriver ?? true,
@@ -225,7 +233,12 @@ export function AppProvider({ children }) {
     if (typeof window !== 'undefined') {
       try {
         localStorage.removeItem('raahi_user');
-      } catch (e) {}
+        localStorage.removeItem('raahi_pending_name');
+        sessionStorage.setItem('raahi_launched', 'true');
+        window.location.href = '/';
+      } catch (e) {
+        window.location.href = '/';
+      }
     }
   }, []);
 
@@ -296,13 +309,35 @@ export function AppProvider({ children }) {
   /* Send Ride Request (Passenger) -> Status = PENDING */
   const sendRideRequest = useCallback(async (rideId, seatsRequested = 1, pickupLocation = '', dropLocation = '', message = '') => {
     try {
+      let currentName = user?.name || user?.fullName;
+      let currentId = user?.id;
+      let currentRating = user?.rating || 5.0;
+
+      if (typeof window !== 'undefined') {
+        try {
+          const saved = localStorage.getItem('raahi_user');
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (parsed.name) currentName = parsed.name;
+            else if (parsed.fullName) currentName = parsed.fullName;
+            if (parsed.id) currentId = parsed.id;
+            if (parsed.rating) currentRating = parsed.rating;
+          } else {
+            const pendingName = localStorage.getItem('raahi_pending_name');
+            if (pendingName) currentName = pendingName;
+          }
+        } catch (e) {}
+      }
+
+      const passengerName = currentName || user?.name || 'Passenger';
+
       const res = await fetch(`/api/rides/${rideId}/requests`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          passengerId: user.id,
-          passengerName: user.name,
-          passengerRating: user.rating,
+          passengerId: currentId || user.id,
+          passengerName: passengerName,
+          passengerRating: currentRating,
           seatsRequested,
           pickupLocation,
           dropLocation,

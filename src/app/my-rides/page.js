@@ -240,7 +240,7 @@ function MyRidesContent() {
                   <div key={req.id} className="card" style={{ padding: '20px', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '14px' }}>
                     <div style={{ flex: '1', minWidth: '280px' }}>
                       <div style={{ fontWeight: '700', fontSize: '1.15rem', marginBottom: '6px', color: '#0f172a' }}>
-                        Passenger: {req.passenger_name} <span style={{ fontSize: '0.9rem', color: '#f59e0b', fontWeight: 'bold' }}>⭐ {req.passenger_rating || 5.0}</span>
+                        Passenger: {req.passenger_name || req.passengerName} <span style={{ fontSize: '0.9rem', color: '#f59e0b', fontWeight: 'bold' }}>⭐ {req.passenger_rating || 5.0}</span>
                       </div>
                       <div style={{ color: '#475569', fontSize: '0.95rem', marginBottom: '4px' }}>
                         <strong>Route:</strong> {req.rideOrigin} → {req.rideDestination}
@@ -314,6 +314,9 @@ function MyRidesContent() {
                     <div style={{ flex: '1', minWidth: '280px' }}>
                       <div style={{ fontWeight: '700', fontSize: '1.15rem', marginBottom: '6px', color: '#0f172a' }}>
                         Trip: {req.rideOrigin || req.pickup_location || 'Pickup'} → {req.rideDestination || req.drop_location || 'Destination'}
+                      </div>
+                      <div style={{ color: '#0284c7', fontSize: '0.92rem', marginBottom: '4px', fontWeight: '600' }}>
+                        Requested by: {req.passenger_name || req.passengerName || user.name}
                       </div>
                       <div style={{ color: '#475569', fontSize: '0.95rem', marginBottom: '4px' }}>
                         <strong>Seats Requested:</strong> {req.seats_requested} seat(s)

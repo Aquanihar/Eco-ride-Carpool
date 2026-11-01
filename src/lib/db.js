@@ -433,6 +433,7 @@ export async function dbCreateRideRequest(requestData) {
     ride_id: requestData.rideId || requestData.ride_id,
     passenger_id: requestData.passengerId || requestData.passenger_id,
     passenger_name: requestData.passengerName || requestData.passenger_name || 'Passenger',
+    passengerName: requestData.passengerName || requestData.passenger_name || 'Passenger',
     passenger_rating: requestData.passengerRating || requestData.passenger_rating || 5.0,
     seats_requested: Number(requestData.seatsRequested || requestData.seats_requested || 1),
     pickup_location: requestData.pickupLocation || requestData.pickup_location || '',
