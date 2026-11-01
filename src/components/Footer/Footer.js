@@ -34,7 +34,7 @@ export default function Footer() {
           <div>
             <h4 className={styles.colTitle}>Company</h4>
             <ul className={styles.linkList}>
-              <li><a href="#">About Us</a></li>
+              <li><Link href="/about">About Us</Link></li>
               <li><a href="#">Blog</a></li>
               <li><a href="#">Careers</a></li>
               <li><a href="#">Press</a></li>
@@ -44,10 +44,10 @@ export default function Footer() {
           <div>
             <h4 className={styles.colTitle}>Support</h4>
             <ul className={styles.linkList}>
-              <li><a href="#">Help Center</a></li>
-              <li><a href="#">Safety</a></li>
-              <li><a href="#">Privacy Policy</a></li>
-              <li><a href="#">Terms of Service</a></li>
+              <li><Link href="/help">Help Center</Link></li>
+              <li><Link href="/safety">Safety</Link></li>
+              <li><Link href="/privacy">Privacy Policy</Link></li>
+              <li><Link href="/terms">Terms of Service</Link></li>
             </ul>
           </div>
         </div>
