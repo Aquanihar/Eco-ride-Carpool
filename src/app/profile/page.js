@@ -13,7 +13,6 @@ import {
   Wallet,
   TrendingDown,
   Award,
-  Shield,
   Edit3,
   Settings,
   LogOut,
@@ -23,7 +22,7 @@ import {
 import styles from './profile.module.css';
 
 function ProfileContent() {
-  const { user, bookings, switchUser, logoutUser, DEMO_PROFILES } = useApp();
+  const { user, bookings, logoutUser } = useApp();
 
   const impactCards = [
     {
@@ -89,20 +88,6 @@ function ProfileContent() {
                 </span>
               </div>
               <div className={styles.profileActions} style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '10px' }}>
-                <button
-                  className="btn btn-primary btn-sm"
-                  onClick={() => switchUser(DEMO_PROFILES.driverA)}
-                  style={{ background: user.id === DEMO_PROFILES.driverA.id ? '#059669' : undefined }}
-                >
-                  Switch to Driver A
-                </button>
-                <button
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => switchUser(DEMO_PROFILES.passengerB)}
-                  style={{ background: user.id === DEMO_PROFILES.passengerB.id ? '#0284c7' : undefined, color: user.id === DEMO_PROFILES.passengerB.id ? '#fff' : undefined }}
-                >
-                  Switch to Passenger B
-                </button>
                 <button className="btn btn-secondary btn-sm" onClick={logoutUser}>
                   <LogOut size={14} /> Sign Out
                 </button>

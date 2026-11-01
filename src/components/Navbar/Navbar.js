@@ -15,7 +15,6 @@ import {
   Home,
   Sun,
   Moon,
-  Shield,
 } from 'lucide-react';
 import styles from './Navbar.module.css';
 
@@ -77,9 +76,6 @@ export default function Navbar() {
             </Link>
             <Link href="/profile" className={`${styles.iconBtn} ${styles.desktopOnly}`} id="nav-profile">
               <User size={20} />
-            </Link>
-            <Link href="/admin/verifications" className={`${styles.iconBtn} ${styles.desktopOnly}`} title="Admin Verification Portal" id="nav-admin">
-              <Shield size={20} />
             </Link>
             <Link href="/offer" className={`btn btn-primary btn-sm ${styles.ctaBtn}`}>
               <Plus size={16} /> Offer a Ride
