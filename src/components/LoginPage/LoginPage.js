@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import CarpoolCarousel from '@/components/CarpoolCarousel/CarpoolCarousel';
 import styles from './LoginPage.module.css';
@@ -891,13 +892,6 @@ export default function LoginPage({ onComplete }) {
                     </button>
                   )}
                 </div>
-
-                <div className={styles.adminHelperLink}>
-                  <span>Are you an administrator? </span>
-                  <a href="/admin/verifications" target="_blank" rel="noreferrer">
-                    Open Backend Verification Portal ↗
-                  </a>
-                </div>
               </div>
             )}
 
@@ -985,8 +979,8 @@ export default function LoginPage({ onComplete }) {
 
             <p className={styles.termsText}>
               By signing up, you agree to our{' '}
-              <a href="#" className={styles.termsLink}>Terms of Service</a> &{' '}
-              <a href="#" className={styles.termsLink}>Privacy Policy</a>
+              <Link href="/terms" className={styles.termsLink} target="_blank">Terms of Service</Link> &{' '}
+              <Link href="/privacy" className={styles.termsLink} target="_blank">Privacy Policy</Link>
             </p>
           </div>
         </div>
